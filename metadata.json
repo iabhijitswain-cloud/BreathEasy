@@ -1,0 +1,6 @@
+{
+  "name": "BreathEasy AI",
+  "description": "Proactive multi-agent community smog and air quality protection companion with 3D digital twin simulation, live Search & Maps grounding, and personalized daily safety plans.",
+  "requestFramePermissions": ["geolocation", "microphone", "camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
