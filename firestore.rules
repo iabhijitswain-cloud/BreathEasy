@@ -37,7 +37,7 @@ service cloud.firestore {
         && isValidId(data.userId)
         && isValidCityId(data.cityId)
         && data.language in ['en', 'hi', 'bn']
-        && data.budgetTier in ['inr_0', 'under_500', 'under_2000', 'under_5000', 'under_10000']
+        && data.budgetTier in ['inr_0', 'under_500', 'under_2000', 'under_5000', 'under_10000', 'custom']
         && data.eli10 is bool
         && data.roomSqft is number && data.roomSqft >= 40 && data.roomSqft <= 5000
         && data.memberCount is number && data.memberCount >= 1 && data.memberCount <= 20

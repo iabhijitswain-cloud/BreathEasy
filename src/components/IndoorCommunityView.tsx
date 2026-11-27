@@ -97,8 +97,15 @@ export const IndoorCommunityView: React.FC<Props> = React.memo(
           household.roomSqft,
           household.hasPets,
           household.hasToddler,
+          household.customBudgetInr,
         ),
-      [household.budgetTier, household.roomSqft, household.hasPets, household.hasToddler],
+      [
+        household.budgetTier,
+        household.roomSqft,
+        household.hasPets,
+        household.hasToddler,
+        household.customBudgetInr,
+      ],
     );
 
     useEffect(() => {
@@ -290,13 +297,28 @@ export const IndoorCommunityView: React.FC<Props> = React.memo(
             {budgetPlans.plans.map((p) => (
               <div
                 key={p.id}
-                className="rounded-xl border border-[#E2DDD2] dark:border-[#283836] p-4 space-y-2.5 bg-[#FAF7F2]/60 dark:bg-[#0E1514]/60"
+                className={`rounded-xl border p-4 space-y-2.5 ${
+                  p.withinBudget
+                    ? 'border-[#0F766E]/60 bg-[#FAF7F2]/80 dark:bg-[#0E1514]/80'
+                    : 'border-[#E2DDD2] dark:border-[#283836] bg-[#FAF7F2]/40 dark:bg-[#0E1514]/40 opacity-85'
+                }`}
               >
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <span className="font-display font-bold text-sm">{p.label}</span>
                   <span className="font-mono-tabular text-xs font-semibold text-[#0F766E] dark:text-[#2DD4BF]">
                     ₹{p.costInr.toLocaleString('en-IN')}
                   </span>
+                </div>
+                <div className="text-[11px] font-semibold">
+                  {p.withinBudget ? (
+                    <span className="text-[#0F766E] dark:text-[#2DD4BF]">
+                      ✓ Fits your ₹{budgetPlans.ceilingInr.toLocaleString('en-IN')} budget
+                    </span>
+                  ) : (
+                    <span className="text-[#B45309] dark:text-[#FBBF24]">
+                      Above your ₹{budgetPlans.ceilingInr.toLocaleString('en-IN')} budget
+                    </span>
+                  )}
                 </div>
                 <div className="text-xs font-medium text-[#4B5B59] dark:text-[#A7B8B5]">
                   {p.estimatedDrop} · Maint ~₹{p.annualMaintInr}/yr

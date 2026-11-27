@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  Bell,
   Mic,
   MicOff,
   Send,
@@ -10,15 +11,19 @@ import {
   Shield,
   SlidersHorizontal,
   RotateCcw,
+  Trash2,
   Sparkles,
   AlertCircle,
   TrendingUp,
   Compass,
+  Database,
 } from 'lucide-react';
 import { postJson } from '../lib/apiClient.ts';
 import {
+  evaluateSmartAlert,
   getCpcbVerdict,
   getDailyJourneyStages,
+  getDataSourceStatuses,
   getPredictiveHourlyOutlook,
   sanitizeHttpUrl,
 } from '../lib/deterministicEngines.ts';
@@ -63,7 +68,21 @@ interface Props {
   personalizationEnabled: boolean;
   onTogglePersonalization: () => void;
   onResetPreferences: () => void;
-  onUpdateHouseholdMeta: (patch: Partial<Pick<HouseholdState, 'roomSqft' | 'housingType'>>) => void;
+  onDeleteMemory: () => void;
+  onUpdateHouseholdMeta: (
+    patch: Partial<
+      Pick<
+        HouseholdState,
+        | 'roomSqft'
+        | 'housingType'
+        | 'commuteMode'
+        | 'schoolTime'
+        | 'notificationStyle'
+        | 'customBudgetInr'
+        | 'localEmergencyContact'
+      >
+    >,
+  ) => void;
   onEmergencyTrigger: (reason: string) => void;
   onNavigateTab: (tab: 'brief' | 'agents' | 'twin' | 'indoor') => void;
 }
@@ -162,6 +181,7 @@ export const ProtectionBriefView: React.FC<Props> = React.memo(
     personalizationEnabled,
     onTogglePersonalization,
     onResetPreferences,
+    onDeleteMemory,
     onUpdateHouseholdMeta,
     onEmergencyTrigger,
     onNavigateTab,
@@ -173,6 +193,18 @@ export const ProtectionBriefView: React.FC<Props> = React.memo(
     const tierStyle = TIER_STYLES[verdict.verdictTier];
     const copy = UI_COPY[household.language];
     const predictive = useMemo(() => getPredictiveHourlyOutlook(household.city), [household.city]);
+    const smartAlert = useMemo(
+      () =>
+        evaluateSmartAlert({
+          city: household.city,
+          notificationStyle: household.notificationStyle,
+        }),
+      [household.city, household.notificationStyle],
+    );
+    const dataSources = useMemo(
+      () => getDataSourceStatuses(household.city, predictive.horizons[0]?.timestampIso),
+      [household.city, predictive.horizons],
+    );
     const journey = useMemo(
       () => getDailyJourneyStages(household.city, household.commuteMode, household.schoolTime),
       [household.city, household.commuteMode, household.schoolTime],
@@ -198,6 +230,7 @@ export const ProtectionBriefView: React.FC<Props> = React.memo(
     const [links, setLinks] = useState<GroundingLink[]>([]);
     const [listening, setListening] = useState(false);
     const [showMemory, setShowMemory] = useState(false);
+    const [showSources, setShowSources] = useState(false);
     const [copiedNotice, setCopiedNotice] = useState(false);
 
     const handleAsk = async (promptText?: string) => {
@@ -444,6 +477,62 @@ Priority: ${priorityOrder
               ))}
             </div>
           )}
+
+          {/* Smart Alert Intelligence + Data Source Transparency */}
+          <div className="pt-3 border-t border-[#E2DDD2] dark:border-[#283836] space-y-3">
+            <div className="rounded-xl bg-[#F0ECE3]/75 dark:bg-[#1E2B29] p-4 flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+              <div className="space-y-1 text-xs">
+                <div className="font-semibold flex items-center gap-1.5 text-[#0F766E] dark:text-[#2DD4BF]">
+                  <Bell className="w-3.5 h-3.5" aria-hidden="true" />
+                  Smart Alert Intelligence ·{' '}
+                  {smartAlert.shouldNotify
+                    ? `Active (${smartAlert.confidence} confidence)`
+                    : 'Suppressed (Anti-Spam)'}
+                </div>
+                <p className="text-[#1A2423] dark:text-[#F1F5F4]">
+                  <strong>What changed:</strong> {smartAlert.whatChanged}{' '}
+                  <strong>Why it matters:</strong> {smartAlert.whyItMatters}
+                </p>
+                <p className="text-[#4B5B59] dark:text-[#A7B8B5]">
+                  <strong>Do this now:</strong> {smartAlert.doThisNow}
+                  {smartAlert.suppressedReason ? ` (${smartAlert.suppressedReason})` : ''}
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-expanded={showSources}
+                onClick={() => setShowSources((v) => !v)}
+                className="min-h-[36px] px-3 py-1.5 rounded-lg border border-[#E2DDD2] dark:border-[#283836] bg-[#FFFFFF] dark:bg-[#16201F] text-xs font-medium flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Database className="w-3.5 h-3.5" aria-hidden="true" />
+                {showSources ? 'Hide Data Sources' : 'Data Sources & Fallbacks'}
+              </button>
+            </div>
+
+            {showSources && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-xs">
+                {dataSources.map((src) => (
+                  <div
+                    key={src.source}
+                    className="rounded-xl bg-[#FAF7F2] dark:bg-[#0E1514] border border-[#E2DDD2] dark:border-[#283836] p-3 space-y-1"
+                  >
+                    <div className="flex items-center justify-between gap-2 font-semibold">
+                      <span>{src.source}</span>
+                      <span className="uppercase text-[11px] text-[#0F766E] dark:text-[#2DD4BF]">
+                        {src.stale ? 'Stale' : `${src.reliability} rel`}
+                      </span>
+                    </div>
+                    <p className="text-[#4B5B59] dark:text-[#A7B8B5]">
+                      {src.data} · {src.frequency}
+                    </p>
+                    <p className="text-[11px] text-[#4B5B59] dark:text-[#A7B8B5]">
+                      Fallback: {src.fallbackAction}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </section>
 
         {/* Ask BreathEasy + Adaptive Memory Controls */}
@@ -492,7 +581,7 @@ Priority: ${priorityOrder
                     diagnoses stored.
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     aria-pressed={!personalizationEnabled}
@@ -504,9 +593,16 @@ Priority: ${priorityOrder
                   <button
                     type="button"
                     onClick={onResetPreferences}
+                    className="min-h-[38px] px-3 py-1.5 rounded-lg bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] font-medium flex items-center gap-1 cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" /> Reset Defaults
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onDeleteMemory}
                     className="min-h-[38px] px-3 py-1.5 rounded-lg bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] font-medium flex items-center gap-1 cursor-pointer text-[#C2410C]"
                   >
-                    <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" /> Reset Memory
+                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" /> Delete Memory
                   </button>
                 </div>
               </div>
@@ -542,6 +638,65 @@ Priority: ${priorityOrder
                     <option value="high_rise">High-Rise Apartment</option>
                     <option value="ground_floor_roadside">Ground-Floor Roadside</option>
                   </select>
+                </label>
+
+                <label className="inline-flex items-center gap-2 font-medium">
+                  Commute Mode:
+                  <select
+                    value={household.commuteMode}
+                    onChange={(e) =>
+                      onUpdateHouseholdMeta({
+                        commuteMode: e.target.value as HouseholdState['commuteMode'],
+                      })
+                    }
+                    className="min-h-[34px] px-2.5 rounded-lg border border-[#E2DDD2] dark:border-[#283836] bg-[#FFFFFF] dark:bg-[#0E1514]"
+                  >
+                    <option value="auto_rickshaw">Open Auto-Rickshaw</option>
+                    <option value="metro">Metro / Enclosed Transit</option>
+                    <option value="car_ac">Car (Recirculated AC)</option>
+                    <option value="walk">Walking</option>
+                  </select>
+                </label>
+
+                <label className="inline-flex items-center gap-2 font-medium">
+                  Activity / School Time:
+                  <input
+                    type="text"
+                    maxLength={20}
+                    value={household.schoolTime}
+                    onChange={(e) => onUpdateHouseholdMeta({ schoolTime: e.target.value })}
+                    className="w-24 min-h-[34px] px-2 rounded-lg border border-[#E2DDD2] dark:border-[#283836] bg-[#FFFFFF] dark:bg-[#0E1514] font-mono-tabular"
+                  />
+                </label>
+
+                <label className="inline-flex items-center gap-2 font-medium">
+                  Alert Style:
+                  <select
+                    value={household.notificationStyle ?? 'calm_essential'}
+                    onChange={(e) =>
+                      onUpdateHouseholdMeta({
+                        notificationStyle: e.target.value as HouseholdState['notificationStyle'],
+                      })
+                    }
+                    className="min-h-[34px] px-2.5 rounded-lg border border-[#E2DDD2] dark:border-[#283836] bg-[#FFFFFF] dark:bg-[#0E1514]"
+                  >
+                    <option value="calm_essential">Calm Essential Only (45m cooldown)</option>
+                    <option value="detailed_shifts">Detailed Shifts (20m cooldown)</option>
+                  </select>
+                </label>
+
+                <label className="inline-flex items-center gap-2 font-medium">
+                  Local Emergency Contact:
+                  <input
+                    type="tel"
+                    maxLength={24}
+                    placeholder="Optional doctor/family #"
+                    value={household.localEmergencyContact ?? ''}
+                    onChange={(e) =>
+                      onUpdateHouseholdMeta({ localEmergencyContact: e.target.value })
+                    }
+                    className="w-40 min-h-[34px] px-2 rounded-lg border border-[#E2DDD2] dark:border-[#283836] bg-[#FFFFFF] dark:bg-[#0E1514]"
+                  />
                 </label>
               </div>
             </div>

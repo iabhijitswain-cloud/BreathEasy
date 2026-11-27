@@ -7,6 +7,7 @@ import {
   type User,
 } from 'firebase/auth';
 import {
+  deleteDoc,
   doc,
   getDoc,
   getDocFromServer,
@@ -156,9 +157,14 @@ export async function loadHouseholdPreferencesFromFirestore(
       language: (['en', 'hi', 'bn'].includes(String(d.language))
         ? d.language
         : 'en') as SupportedLanguage,
-      budgetTier: (['inr_0', 'under_500', 'under_2000', 'under_5000', 'under_10000'].includes(
-        String(d.budgetTier),
-      )
+      budgetTier: ([
+        'inr_0',
+        'under_500',
+        'under_2000',
+        'under_5000',
+        'under_10000',
+        'custom',
+      ].includes(String(d.budgetTier))
         ? d.budgetTier
         : 'under_2000') as BudgetTier,
       eli10: Boolean(d.eli10),
@@ -167,5 +173,17 @@ export async function loadHouseholdPreferencesFromFirestore(
     };
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, path);
+  }
+}
+
+export async function deleteHouseholdPreferencesFromFirestore(userId: string): Promise<void> {
+  if (!VALID_ID_REGEX.test(userId)) {
+    throw new Error('Invalid identifier format for household deletion.');
+  }
+  const path = `users/${userId}/private/household`;
+  try {
+    await deleteDoc(doc(db, 'users', userId, 'private', 'household'));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }

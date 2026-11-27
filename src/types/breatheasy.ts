@@ -5,7 +5,8 @@ export type BudgetTier =
   | 'under_500'
   | 'under_2000'
   | 'under_5000'
-  | 'under_10000';
+  | 'under_10000'
+  | 'custom';
 
 export type AgentId =
   | 'env_intelligence'
@@ -52,6 +53,9 @@ export interface HouseholdState {
   language: SupportedLanguage;
   eli10: boolean;
   budgetTier: BudgetTier;
+  customBudgetInr?: number;
+  notificationStyle?: 'calm_essential' | 'detailed_shifts';
+  localEmergencyContact?: string;
   roomSqft: number;
   hasPets: boolean;
   hasToddler: boolean;
@@ -120,6 +124,10 @@ export interface TwinScenarioInput {
   durationMin: number;
   purifierHours: number;
   roomSealed: boolean;
+  activityType?: 'commute' | 'outdoor_exercise' | 'sleep_recovery';
+  timeSlot?: string;
+  indoorChoice?: boolean;
+  maskProtection?: 'none' | 'surgical' | 'n95';
 }
 
 export interface TwinScenarioResult {

@@ -44,7 +44,17 @@ export const householdSchema = z.object({
   city: cityPresetSchema,
   language: z.enum(['en', 'hi', 'bn']),
   eli10: z.boolean(),
-  budgetTier: z.enum(['inr_0', 'under_500', 'under_2000', 'under_5000', 'under_10000']),
+  budgetTier: z.enum([
+    'inr_0',
+    'under_500',
+    'under_2000',
+    'under_5000',
+    'under_10000',
+    'custom',
+  ]),
+  customBudgetInr: z.number().min(0).max(100000).optional(),
+  notificationStyle: z.enum(['calm_essential', 'detailed_shifts']).optional(),
+  localEmergencyContact: z.string().max(40).optional(),
   roomSqft: z.number().min(40).max(5000),
   hasPets: z.boolean(),
   hasToddler: z.boolean(),
@@ -83,6 +93,10 @@ export const twinSimulateSchema = z.object({
   durationMin: z.number().min(1).max(600),
   purifierHours: z.number().min(0).max(24),
   roomSealed: z.boolean(),
+  activityType: z.enum(['commute', 'outdoor_exercise', 'sleep_recovery']).optional(),
+  timeSlot: z.string().max(32).optional(),
+  indoorChoice: z.boolean().optional(),
+  maskProtection: z.enum(['none', 'surgical', 'n95']).optional(),
 });
 
 export const indoorSimulateSchema = z.object({

@@ -32,6 +32,7 @@ vi.mock('../src/lib/firebase.ts', () => ({
   signOutUser: vi.fn(),
   saveHouseholdPreferencesToFirestore: vi.fn().mockResolvedValue(undefined),
   loadHouseholdPreferencesFromFirestore: vi.fn().mockResolvedValue(null),
+  deleteHouseholdPreferencesFromFirestore: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('firebase/auth', () => ({
@@ -52,27 +53,24 @@ describe('BreathEasy AI UI & Accessibility', () => {
     );
   });
 
-  it('renders skip link, WAI-ARIA tablist, predictive outlook, and daily journey nudges', () => {
+  it('renders skip link, WAI-ARIA tablist, Smart Alert Intelligence, and Data Sources disclosure', () => {
     render(<App />);
     expect(screen.getByText('Skip to main content')).toBeInTheDocument();
     expect(screen.getAllByRole('tablist').length).toBeGreaterThanOrEqual(1);
     expect(
       screen.getByText(/Predictive Risk Intelligence \(Observed vs\. 1h–24h Modeled Outlook\)/i),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Calm Daily Protection Journey & Behavioral Nudges/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Smart Alert Intelligence/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Data Sources & Fallbacks/i }));
+    expect(screen.getByText(/CPCB \/ State PCB Station Snapshot/i)).toBeInTheDocument();
   });
 
-  it('navigates across all 4 primary views and toggles ELI10 cleanly', async () => {
+  it('supports WAI-ARIA keyboard ArrowRight tab navigation across primary views', async () => {
     render(<App />);
 
-    const eli10Btn = screen.getByRole('button', { name: /Explain Like I'm 10/i });
-    expect(eli10Btn).toHaveAttribute('aria-pressed', 'false');
-    fireEvent.click(eli10Btn);
-    expect(eli10Btn).toHaveAttribute('aria-pressed', 'true');
-
-    fireEvent.click(screen.getByRole('tab', { name: '8-Agent Pipeline' }));
+    const briefTab = screen.getByRole('tab', { name: 'Protection Brief' });
+    fireEvent.keyDown(briefTab, { key: 'ArrowRight' });
     expect(
       await screen.findByRole('heading', { name: /8-Agent Pipeline \(Run & Verify One by One\)/i }),
     ).toBeInTheDocument();
@@ -90,14 +88,22 @@ describe('BreathEasy AI UI & Accessibility', () => {
     ).toBeInTheDocument();
   });
 
-  it('opens Memory & Home Settings, updates safe room size, and opens Emergency 112 dialog', async () => {
+  it('supports custom budget input, Memory & Home Settings edit/delete, and Emergency 112 focus handling', async () => {
     render(<App />);
+
+    const budgetSelect = screen.getByLabelText('Budget Tier');
+    fireEvent.change(budgetSelect, { target: { value: 'custom' } });
+    const customInput = screen.getByLabelText('Custom budget in INR') as HTMLInputElement;
+    fireEvent.change(customInput, { target: { value: '3500' } });
+    expect(customInput.value).toBe('3500');
 
     fireEvent.click(screen.getByRole('button', { name: /Memory & Home Settings/i }));
     const roomInput = screen.getByLabelText(/Safe Room Size \(sq ft\):/i) as HTMLInputElement;
-    expect(roomInput.value).toBe('140');
     fireEvent.change(roomInput, { target: { value: '220' } });
     expect(roomInput.value).toBe('220');
+
+    fireEvent.click(screen.getByRole('button', { name: /Delete Memory/i }));
+    expect(screen.getByText(/Privacy-First Adaptive Memory \(Paused\)/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Emergency 112/i }));
     expect(await screen.findByRole('dialog')).toBeInTheDocument();

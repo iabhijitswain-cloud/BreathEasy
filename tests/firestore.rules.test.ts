@@ -41,13 +41,14 @@ describe('Firestore Security Rules & Blueprint Invariants (Dirty Dozen Guardrail
     expect(rules).not.toMatch(/allow\s+list:\s*if\s+isSignedIn\(\)\s*;/);
   });
 
-  it('keeps firebase-blueprint.json maxLength constraints synchronized with rules', () => {
+  it('keeps firebase-blueprint.json maxLength and enum constraints synchronized with rules', () => {
     const noteMax = blueprint.entities.CommunityPulseDoc.properties.note.maxLength;
     const summaryMax = blueprint.entities.SavedAgentBriefDoc.properties.summary.maxLength;
     expect(noteMax).toBe(240);
     expect(summaryMax).toBe(300);
     expect(rules).toContain('data.note.size() <= 240');
     expect(rules).toContain('data.summary.size() <= 300');
+    expect(rules).toContain("'custom'");
     expect(Object.keys(blueprint.firestore)).toHaveLength(3);
   });
 });

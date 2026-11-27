@@ -15,6 +15,7 @@ import { postJson } from './lib/apiClient.ts';
 import { CITY_PRESETS, DEFAULT_MEMBERS } from './lib/deterministicEngines.ts';
 import {
   auth,
+  deleteHouseholdPreferencesFromFirestore,
   loadHouseholdPreferencesFromFirestore,
   saveHouseholdPreferencesToFirestore,
   signInWithGoogle,
@@ -49,6 +50,13 @@ const EmergencyOverlay = lazy(() =>
 
 type ActiveTab = 'brief' | 'agents' | 'twin' | 'indoor';
 
+const PRIMARY_TABS: { id: ActiveTab; label: string; mobileLabel: string }[] = [
+  { id: 'brief', label: 'Protection Brief', mobileLabel: 'Brief' },
+  { id: 'agents', label: '8-Agent Pipeline', mobileLabel: '8 Agents' },
+  { id: 'twin', label: '3D Digital Twin', mobileLabel: '3D Twin' },
+  { id: 'indoor', label: 'Indoor & Community', mobileLabel: 'Indoor & Pulse' },
+];
+
 const STORAGE_KEY = 'breatheasy_local_prefs_v1';
 
 const DEFAULT_HOUSEHOLD: HouseholdState = {
@@ -56,6 +64,9 @@ const DEFAULT_HOUSEHOLD: HouseholdState = {
   language: 'en',
   eli10: false,
   budgetTier: 'under_2000',
+  customBudgetInr: 2000,
+  notificationStyle: 'calm_essential',
+  localEmergencyContact: '',
   roomSqft: 140,
   hasPets: true,
   hasToddler: true,
@@ -110,6 +121,8 @@ export default function App() {
   const [emergencyOpen, setEmergencyOpen] = useState(false);
   const [emergencyReason, setEmergencyReason] = useState<string | null>(null);
   const skipNextRemoteSyncRef = useRef(false);
+  const agentOutputsRef = useRef(agentOutputs);
+  agentOutputsRef.current = agentOutputs;
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', darkMode);
@@ -192,7 +205,7 @@ export default function App() {
         const data = await postJson<Record<string, unknown>, AgentRunResult>('/api/agents/run', {
           agentId,
           household,
-          priorOutputs: priorSnapshot ?? agentOutputs,
+          priorOutputs: priorSnapshot ?? agentOutputsRef.current,
           roomImageBase64: overrideImage?.base64 ?? roomImageBase64,
           roomImageMimeType: overrideImage?.mimeType ?? roomImageMimeType,
           indoorNote: overrideImage?.note,
@@ -221,7 +234,7 @@ export default function App() {
         setRunningAgent(null);
       }
     },
-    [agentOutputs, household, roomImageBase64, roomImageMimeType],
+    [household, roomImageBase64, roomImageMimeType],
   );
 
   const handleRunAllSequentially = useCallback(async () => {
@@ -245,9 +258,9 @@ export default function App() {
     async (base64: string, mimeType: string, note: string) => {
       setRoomImageBase64(base64);
       setRoomImageMimeType(mimeType);
-      await runAgent('indoor_air', agentOutputs, { base64, mimeType, note });
+      await runAgent('indoor_air', agentOutputsRef.current, { base64, mimeType, note });
     },
-    [agentOutputs, runAgent],
+    [runAgent],
   );
 
   const handleResetPreferences = useCallback(() => {
@@ -260,9 +273,54 @@ export default function App() {
     setAgentOutputs({});
   }, []);
 
+  const handleDeleteMemory = useCallback(async () => {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+    if (user?.emailVerified) {
+      await deleteHouseholdPreferencesFromFirestore(user.uid).catch(() => {});
+    }
+    setPersonalizationEnabled(false);
+    setHousehold(DEFAULT_HOUSEHOLD);
+    setAgentOutputs({});
+  }, [user]);
+
   const handleUpdateHouseholdMeta = useCallback(
-    (patch: Partial<Pick<HouseholdState, 'roomSqft' | 'housingType'>>) => {
+    (
+      patch: Partial<
+        Pick<
+          HouseholdState,
+          | 'roomSqft'
+          | 'housingType'
+          | 'commuteMode'
+          | 'schoolTime'
+          | 'notificationStyle'
+          | 'customBudgetInr'
+          | 'localEmergencyContact'
+        >
+      >,
+    ) => {
       setHousehold((prev) => ({ ...prev, ...patch }));
+    },
+    [],
+  );
+
+  const handleTabKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLButtonElement>, currentIndex: number, prefix: string) => {
+      let nextIdx = -1;
+      if (e.key === 'ArrowRight') nextIdx = (currentIndex + 1) % PRIMARY_TABS.length;
+      else if (e.key === 'ArrowLeft')
+        nextIdx = (currentIndex - 1 + PRIMARY_TABS.length) % PRIMARY_TABS.length;
+      else if (e.key === 'Home') nextIdx = 0;
+      else if (e.key === 'End') nextIdx = PRIMARY_TABS.length - 1;
+      if (nextIdx >= 0) {
+        e.preventDefault();
+        const nextTab = PRIMARY_TABS[nextIdx];
+        setActiveTab(nextTab.id);
+        document.getElementById(`${prefix}${nextTab.id}`)?.focus();
+      }
     },
     [],
   );
@@ -301,13 +359,6 @@ export default function App() {
     [],
   );
 
-  const tabs: { id: ActiveTab; label: string; mobileLabel: string }[] = [
-    { id: 'brief', label: 'Protection Brief', mobileLabel: 'Brief' },
-    { id: 'agents', label: '8-Agent Pipeline', mobileLabel: '8 Agents' },
-    { id: 'twin', label: '3D Digital Twin', mobileLabel: '3D Twin' },
-    { id: 'indoor', label: 'Indoor & Community', mobileLabel: 'Indoor & Pulse' },
-  ];
-
   return (
     <div className="min-h-screen flex flex-col bg-[#FAF7F2] text-[#1A2423] dark:bg-[#0E1514] dark:text-[#F1F5F4] transition-colors">
       <a
@@ -333,16 +384,18 @@ export default function App() {
             role="tablist"
             className="hidden md:flex items-center gap-7 text-sm font-medium"
           >
-            {tabs.map((item) => (
+            {PRIMARY_TABS.map((item, idx) => (
               <button
                 key={item.id}
                 id={`tab-${item.id}`}
                 role="tab"
+                tabIndex={activeTab === item.id ? 0 : -1}
                 aria-selected={activeTab === item.id}
                 aria-controls={`panel-${item.id}`}
                 type="button"
                 onClick={() => setActiveTab(item.id)}
-                className={`whitespace-nowrap shrink-0 py-1.5 border-b-2 transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F766E] ${
+                onKeyDown={(e) => handleTabKeyDown(e, idx, 'tab-')}
+                className={`whitespace-nowrap shrink-0 py-1.5 border-b-2 transition-colors cursor-pointer ${
                   activeTab === item.id
                     ? 'border-[#0F766E] text-[#0F766E] dark:border-[#2DD4BF] dark:text-[#2DD4BF] font-semibold'
                     : 'border-transparent text-[#4B5B59] dark:text-[#A7B8B5] hover:text-[#1A2423] dark:hover:text-[#F1F5F4]'
@@ -359,7 +412,7 @@ export default function App() {
               setEmergencyReason(null);
               setEmergencyOpen(true);
             }}
-            className="min-h-[42px] px-4 py-2 rounded-xl bg-[#C2410C] hover:bg-[#9A3412] text-white text-xs sm:text-sm font-semibold flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#C2410C]"
+            className="min-h-[42px] px-4 py-2 rounded-xl bg-[#C2410C] hover:bg-[#9A3412] text-white text-xs sm:text-sm font-semibold flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer"
           >
             <PhoneCall className="w-4 h-4" aria-hidden="true" />
             Emergency 112
@@ -371,13 +424,17 @@ export default function App() {
           aria-label="Mobile sections"
           className="md:hidden border-t border-[#E2DDD2] dark:border-[#283836] px-3 py-2 flex items-center gap-1.5 overflow-x-auto"
         >
-          {tabs.map((item) => (
+          {PRIMARY_TABS.map((item, idx) => (
             <button
               key={item.id}
+              id={`mobile-tab-${item.id}`}
               role="tab"
+              tabIndex={activeTab === item.id ? 0 : -1}
               aria-selected={activeTab === item.id}
+              aria-controls={`panel-${item.id}`}
               type="button"
               onClick={() => setActiveTab(item.id)}
+              onKeyDown={(e) => handleTabKeyDown(e, idx, 'mobile-tab-')}
               className={`min-h-[38px] px-3 py-1 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
                 activeTab === item.id
                   ? 'bg-[#0F766E] text-white'
@@ -433,8 +490,29 @@ export default function App() {
                 <option value="under_2000">Budget: Under ₹2,000</option>
                 <option value="under_5000">Budget: Under ₹5,000</option>
                 <option value="under_10000">Budget: Under ₹10,000</option>
+                <option value="custom">Budget: Custom (₹)</option>
               </select>
             </label>
+
+            {household.budgetTier === 'custom' && (
+              <label className="inline-flex items-center gap-1.5 font-medium">
+                <span className="sr-only">Custom budget in rupees</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100000}
+                  aria-label="Custom budget in INR"
+                  value={household.customBudgetInr ?? 2000}
+                  onChange={(e) =>
+                    setHousehold((prev) => ({
+                      ...prev,
+                      customBudgetInr: Math.max(0, Math.min(100000, Number(e.target.value) || 0)),
+                    }))
+                  }
+                  className="w-24 min-h-[36px] px-2 rounded-lg border border-[#E2DDD2] dark:border-[#283836] bg-[#FFFFFF] dark:bg-[#0E1514] font-mono-tabular"
+                />
+              </label>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -533,6 +611,7 @@ export default function App() {
               personalizationEnabled={personalizationEnabled}
               onTogglePersonalization={() => setPersonalizationEnabled((v) => !v)}
               onResetPreferences={handleResetPreferences}
+              onDeleteMemory={() => void handleDeleteMemory()}
               onUpdateHouseholdMeta={handleUpdateHouseholdMeta}
               onEmergencyTrigger={(reason) => {
                 setEmergencyReason(reason);

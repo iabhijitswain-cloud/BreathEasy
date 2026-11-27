@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   CITY_PRESETS,
   detectClinicalEmergencyDistress,
+  evaluateSmartAlert,
   getCleanRoomPlans,
   getCpcbVerdict,
   getDailyJourneyStages,
+  getDataSourceStatuses,
   getPredictiveHourlyOutlook,
   runDigitalTwinSimulation,
   runIndoorBoxSimulation,
@@ -45,7 +47,7 @@ describe('deterministicEngines', () => {
     expect(protectedRoom.dropPctRange[1]).toBeGreaterThanOrEqual(protectedRoom.dropPctRange[0]);
   });
 
-  it('keeps CO2 claims strictly restricted to defensible modal shifts', () => {
+  it('keeps CO2 claims strictly restricted to defensible modal shifts and scales with mask/duration', () => {
     const metro = runDigitalTwinSimulation({
       presetId: 'metro_vs_auto',
       ambientPm25: 298,
@@ -53,6 +55,15 @@ describe('deterministicEngines', () => {
       durationMin: 35,
       purifierHours: 4,
       roomSealed: true,
+    });
+    const metroWithN95 = runDigitalTwinSimulation({
+      presetId: 'metro_vs_auto',
+      ambientPm25: 298,
+      roomSqft: 140,
+      durationMin: 35,
+      purifierHours: 4,
+      roomSealed: true,
+      maskProtection: 'n95',
     });
     const exercise = runDigitalTwinSimulation({
       presetId: 'exercise_indoors',
@@ -65,17 +76,22 @@ describe('deterministicEngines', () => {
 
     expect(metro.co2Defensible).toBe(true);
     expect(metro.co2SavedKg).toBeGreaterThan(0);
+    expect(metroWithN95.whatIfRangeUgM3[1]).toBeLessThan(metro.whatIfRangeUgM3[0]);
     expect(exercise.co2Defensible).toBe(false);
     expect(exercise.co2SavedKg).toBeNull();
   });
 
-  it('excludes toxic houseplants when pets or toddlers are present', () => {
+  it('excludes toxic houseplants and accurately evaluates custom budget ceilings', () => {
     const withPet = getCleanRoomPlans('under_2000', 140, true, false);
     const noPetNoToddler = getCleanRoomPlans('under_2000', 140, false, false);
+    const customLow = getCleanRoomPlans('custom', 140, false, false, 300);
 
     expect(withPet.excludedPlants.length).toBeGreaterThan(0);
     expect(withPet.plantDisclaimer).toContain('do NOT meaningfully remove PM2.5');
     expect(noPetNoToddler.excludedPlants.length).toBe(0);
+    expect(customLow.ceilingInr).toBe(300);
+    expect(customLow.plans.find((p) => p.id === 'budget')?.withinBudget).toBe(true);
+    expect(customLow.plans.find((p) => p.id === 'best_value')?.withinBudget).toBe(false);
   });
 
   it('triggers pre-LLM clinical distress gate in English, Hindi, and Bengali', () => {
@@ -96,6 +112,35 @@ describe('deterministicEngines', () => {
     const invalid = getPredictiveHourlyOutlook({ ...CITY_PRESETS[0], baselinePm25: 0 });
     expect(invalid.insufficientData).toBe(true);
     expect(invalid.horizons).toHaveLength(0);
+  });
+
+  it('suppresses minor fluctuations in Smart Alert cooldown while alerting on severe escalation', () => {
+    const bengaluru = CITY_PRESETS[4]; // PM2.5 58, wind 12.8
+    const suppressed = evaluateSmartAlert({
+      city: bengaluru,
+      previousPm25: 55,
+      lastAlertAtMs: 1000,
+      nowMs: 1000 + 10 * 60 * 1000,
+    });
+    expect(suppressed.shouldNotify).toBe(false);
+    expect(suppressed.suppressedReason).toBeTruthy();
+
+    const severe = evaluateSmartAlert({
+      city: CITY_PRESETS[0], // PM2.5 298 > 250
+      previousPm25: 290,
+      lastAlertAtMs: 1000,
+      nowMs: 1000 + 5 * 60 * 1000,
+    });
+    expect(severe.shouldNotify).toBe(true);
+    expect(severe.severity).toBe('high');
+  });
+
+  it('flags stale station snapshots and exposes fallback actions', () => {
+    const threeHoursAgo = new Date(Date.now() - 180 * 60 * 1000).toISOString();
+    const sources = getDataSourceStatuses(CITY_PRESETS[0], threeHoursAgo);
+    expect(sources[0].stale).toBe(true);
+    expect(sources[0].reliability).toBe('low');
+    expect(sources[0].fallbackAction).toBeTruthy();
   });
 
   it('builds calm 4-stage daily journey nudges', () => {

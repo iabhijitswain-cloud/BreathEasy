@@ -205,16 +205,31 @@ export function runIndoorBoxSimulation(opts: {
 
 export function runDigitalTwinSimulation(input: TwinScenarioInput): TwinScenarioResult {
   const base = input.ambientPm25;
+  const maskFactor =
+    input.maskProtection === 'n95'
+      ? 0.25
+      : input.maskProtection === 'surgical'
+        ? 0.72
+        : 1.0;
+  const durationScale = Math.max(0.5, Math.min(2.0, input.durationMin / 35));
+  const maskNote =
+    input.maskProtection === 'n95'
+      ? 'Fitted N95 (~75% real-world filtration factor applied).'
+      : input.maskProtection === 'surgical'
+        ? 'Surgical mask (~28% particle barrier applied; gap leakage remains).'
+        : 'Unmasked baseline exposure.';
 
   switch (input.presetId) {
     case 'leave_earlier': {
-      const baseLow = Math.round(base * 0.92);
-      const baseHigh = Math.round(base * 1.22);
-      const altLow = Math.round(base * 0.72);
-      const altHigh = Math.round(base * 0.95);
+      const baseLow = Math.round(base * 0.92 * durationScale);
+      const baseHigh = Math.round(base * 1.22 * durationScale);
+      const altLow = Math.round(base * 0.72 * maskFactor * durationScale);
+      const altHigh = Math.round(base * 0.95 * maskFactor * durationScale);
+      const pctLow = Math.max(-90, Math.round(((altLow - baseHigh) / baseHigh) * 100));
+      const pctHigh = Math.min(-5, Math.round(((altHigh - baseLow) / baseLow) * 100));
       return {
-        title: 'Leave 30 minutes earlier (07:15 vs 07:45 AM)',
-        exposureChangePctRange: [-24, -14],
+        title: `Leave 30 mins earlier (${input.timeSlot || '07:15 AM'} · ${input.durationMin}m)`,
+        exposureChangePctRange: [Math.min(pctLow, pctHigh), Math.max(pctLow, pctHigh)],
         baselineRangeUgM3: [baseLow, baseHigh],
         whatIfRangeUgM3: [altLow, altHigh],
         costDiffInr: 0,
@@ -223,32 +238,36 @@ export function runDigitalTwinSimulation(input: TwinScenarioInput): TwinScenario
         co2Defensible: false,
         confidence: 'medium',
         assumptions: [
-          'Assumes typical 15%–20% lower arterial rush-hour NO2/exhaust density at 07:15 AM.',
+          'Assumes typical 15%–20% lower arterial rush-hour NO2/exhaust density 30 mins earlier.',
+          maskNote,
           'Modeled range only — not a personal wearable air measurement.',
         ],
         verdict: 'Leaving 30 mins earlier avoids peak school-gate idling and saves ~6 mins in transit.',
       };
     }
     case 'metro_vs_auto': {
-      const baseLow = Math.round(base * 1.1);
-      const baseHigh = Math.round(base * 1.45);
-      const altLow = Math.round(base * 0.48);
-      const altHigh = Math.round(base * 0.68);
+      const baseLow = Math.round(base * 1.1 * durationScale);
+      const baseHigh = Math.round(base * 1.45 * durationScale);
+      const altLow = Math.round(base * 0.48 * maskFactor * durationScale);
+      const altHigh = Math.round(base * 0.68 * maskFactor * durationScale);
+      const pctLow = Math.max(-92, Math.round(((altLow - baseHigh) / baseHigh) * 100));
+      const pctHigh = Math.min(-18, Math.round(((altHigh - baseLow) / baseLow) * 100));
       return {
-        title: 'Switch open autorickshaw to Metro + covered walk',
-        exposureChangePctRange: [-52, -38],
+        title: `Switch open auto to Metro + covered walk (${input.durationMin}m)`,
+        exposureChangePctRange: [Math.min(pctLow, pctHigh), Math.max(pctLow, pctHigh)],
         baselineRangeUgM3: [baseLow, baseHigh],
         whatIfRangeUgM3: [altLow, altHigh],
         costDiffInr: -35,
         timeDiffMin: 4,
-        co2SavedKg: 1.85,
+        co2SavedKg: Number((1.85 * durationScale).toFixed(2)),
         co2Defensible: true,
         confidence: 'medium',
         assumptions: [
           'Assumes Metro coach filtration factor (~0.45–0.55 I/O) vs. roadside open auto (~1.25x ambient).',
+          maskNote,
           'Defensible CO2 savings derived from DEFRA passenger-km modal shift factor.',
         ],
-        verdict: 'Substantial exposure drop for children and saves ~₹35 and 1.85 kg CO2e per round trip.',
+        verdict: 'Substantial exposure drop for children and saves ~₹35 per round trip.',
       };
     }
     case 'exercise_indoors': {
@@ -341,17 +360,37 @@ export interface CleanRoomTierPlan {
   costInr: number;
   annualMaintInr: number;
   estimatedDrop: string;
+  withinBudget: boolean;
   steps: string[];
   needed: string[];
   doNotBuy: string[];
 }
 
+export function getBudgetCeilingInr(budget: BudgetTier, customBudgetInr?: number): number {
+  switch (budget) {
+    case 'inr_0':
+      return 0;
+    case 'under_500':
+      return 500;
+    case 'under_2000':
+      return 2000;
+    case 'under_5000':
+      return 5000;
+    case 'under_10000':
+      return 10000;
+    case 'custom':
+      return Math.max(0, Math.min(100000, Math.round(customBudgetInr ?? 2000)));
+  }
+}
+
 export function getCleanRoomPlans(
-  _budget: BudgetTier,
+  budget: BudgetTier,
   roomSqft: number,
   hasPets: boolean,
   hasToddler: boolean,
+  customBudgetInr?: number,
 ) {
+  const ceilingInr = getBudgetCeilingInr(budget, customBudgetInr);
   const plans: CleanRoomTierPlan[] = [
     {
       id: 'zero',
@@ -359,6 +398,7 @@ export function getCleanRoomPlans(
       costInr: 0,
       annualMaintInr: 0,
       estimatedDrop: '20%–32% indoor PM2.5 drop (modeled)',
+      withinBudget: true,
       steps: [
         'Wet-mop bedroom floor daily instead of dry sweeping.',
         'Press a rolled damp towel along the bottom gap of the bedroom door.',
@@ -369,16 +409,30 @@ export function getCleanRoomPlans(
     },
     {
       id: 'budget',
-      label: 'Budget Plan (Under ₹2,000)',
-      costInr: 1650,
-      annualMaintInr: 1600,
-      estimatedDrop: `50%–65% PM2.5 drop in ~${roomSqft} sq ft`,
-      steps: [
-        'Apply EPDM D-profile foam weatherstripping on window & balcony gaps.',
-        'Attach a genuine cylindrical H13 HEPA replacement filter to an existing 300mm table/exhaust fan.',
-        'Run on medium speed in one designated sleeping room with door shut.',
-      ],
-      needed: ['EPDM foam tape (~₹250)', 'True H13 replacement cylinder (~₹1,400)', 'Existing fan'],
+      label: ceilingInr < 1650 && ceilingInr >= 250 ? 'Gap-Seal Starter (₹250)' : 'Budget Plan (Under ₹2,000)',
+      costInr: ceilingInr < 1650 && ceilingInr >= 250 ? 250 : 1650,
+      annualMaintInr: ceilingInr < 1650 && ceilingInr >= 250 ? 250 : 1600,
+      estimatedDrop:
+        ceilingInr < 1650 && ceilingInr >= 250
+          ? `30%–42% PM2.5 drop in ~${roomSqft} sq ft`
+          : `50%–65% PM2.5 drop in ~${roomSqft} sq ft`,
+      withinBudget: ceilingInr >= 250,
+      steps:
+        ceilingInr < 1650 && ceilingInr >= 250
+          ? [
+              'Apply EPDM D-profile foam weatherstripping on window & balcony gaps.',
+              'Wet-mop floor and seal under-door gap with a damp cotton towel.',
+              'Keep exhaust running during cooking; avoid incense/candles.',
+            ]
+          : [
+              'Apply EPDM D-profile foam weatherstripping on window & balcony gaps.',
+              'Attach a genuine cylindrical H13 HEPA replacement filter to an existing 300mm table/exhaust fan.',
+              'Run on medium speed in one designated sleeping room with door shut.',
+            ],
+      needed:
+        ceilingInr < 1650 && ceilingInr >= 250
+          ? ['EPDM foam tape (~₹250)', 'Cotton towel', 'Wet mop']
+          : ['EPDM foam tape (~₹250)', 'True H13 replacement cylinder (~₹1,400)', 'Existing fan'],
       doNotBuy: ['₹800–₹1,500 USB desktop "ionizers" (negligible CADR & potential trace ozone).'],
     },
     {
@@ -387,6 +441,7 @@ export function getCleanRoomPlans(
       costInr: 8999,
       annualMaintInr: 2200,
       estimatedDrop: `75%–85% PM2.5 drop in ~${roomSqft} sq ft`,
+      withinBudget: ceilingInr >= 8999,
       steps: [
         'Seal perimeter gaps with EPDM foam strip.',
         'Place a CADR >= 300 m³/h True HEPA H13 unit 30 cm away from walls.',
@@ -418,6 +473,7 @@ export function getCleanRoomPlans(
   }
 
   return {
+    ceilingInr,
     plans,
     safePlants,
     excludedPlants,
@@ -605,4 +661,135 @@ export function getDailyJourneyStages(
     },
   ];
 }
+
+export interface SmartAlertDecision {
+  shouldNotify: boolean;
+  suppressedReason?: string;
+  severity: 'info' | 'advisory' | 'high';
+  whatChanged: string;
+  whyItMatters: string;
+  confidence: 'high' | 'medium' | 'low';
+  doThisNow: string;
+}
+
+/**
+ * Feature L — Anti-spam Smart Alert Intelligence.
+ * Suppresses minor fluctuations within cooldown windows unless conditions cross into Severe.
+ */
+export function evaluateSmartAlert(opts: {
+  city: CityPreset;
+  previousPm25?: number;
+  lastAlertAtMs?: number;
+  nowMs?: number;
+  notificationStyle?: 'calm_essential' | 'detailed_shifts';
+}): SmartAlertDecision {
+  const now = opts.nowMs ?? Date.now();
+  const prev = opts.previousPm25 ?? opts.city.baselinePm25;
+  const curr = opts.city.baselinePm25;
+  const deltaPct = prev > 0 ? Math.abs(curr - prev) / prev : 0;
+  const cooldownMs = opts.notificationStyle === 'detailed_shifts' ? 20 * 60 * 1000 : 45 * 60 * 1000;
+  const inCooldown = typeof opts.lastAlertAtMs === 'number' && now - opts.lastAlertAtMs < cooldownMs;
+  const isSevere = curr > 250;
+  const lowWindInversion = opts.city.windKmh < 5 && opts.city.tempC < 18;
+
+  if (inCooldown && !isSevere) {
+    return {
+      shouldNotify: false,
+      suppressedReason: 'Anti-spam cooldown active — no severe escalation detected.',
+      severity: 'info',
+      whatChanged: `${opts.city.locality} PM2.5 remains ~${curr} µg/m³.`,
+      whyItMatters: 'Steady readings do not require repeated interruptions.',
+      confidence: 'high',
+      doThisNow: 'Continue your current safe-room or midday schedule calmly.',
+    };
+  }
+
+  if (!isSevere && deltaPct < 0.15 && !lowWindInversion) {
+    return {
+      shouldNotify: false,
+      suppressedReason: 'Minor fluctuation (<15%) — suppressed to prevent notification fatigue.',
+      severity: 'info',
+      whatChanged: `PM2.5 shifted by less than 15% (~${curr} µg/m³).`,
+      whyItMatters: 'Small hourly ripples do not change safe activity choices.',
+      confidence: 'medium',
+      doThisNow: 'Keep standard outdoor/indoor pacing; check again before evening commute.',
+    };
+  }
+
+  return {
+    shouldNotify: true,
+    severity: isSevere ? 'high' : 'advisory',
+    whatChanged:
+      prev !== curr
+        ? `${opts.city.locality} PM2.5 moved from ~${prev} to ~${curr} µg/m³ (wind ${opts.city.windKmh} km/h).`
+        : `${opts.city.locality} is at ~${curr} µg/m³ with ${lowWindInversion ? 'low-wind evening inversion risk' : 'elevated particulate load'}.`,
+    whyItMatters:
+      curr > 120
+        ? 'Young children, elders, and respiratory-sensitive members inhale higher fine-particle doses near roads.'
+        : 'Moderate haze can add irritation during sustained outdoor exertion.',
+    confidence: lowWindInversion || isSevere ? 'high' : 'medium',
+    doThisNow: isSevere
+      ? 'Move vulnerable family members indoors, seal gaps in one clean sleeping room, and use fitted N95 for essential travel.'
+      : 'Shift errands toward the midday window (13:00–15:30) and prefer enclosed transit.',
+  };
+}
+
+export interface DataSourceStatus {
+  source: string;
+  data: string;
+  frequency: string;
+  reliability: 'high' | 'medium' | 'low';
+  stale: boolean;
+  lastUpdatedIso: string;
+  fallbackAction: string;
+}
+
+export function getDataSourceStatuses(
+  city: CityPreset,
+  observedTimestampIso?: string,
+): DataSourceStatus[] {
+  const ts = observedTimestampIso || new Date().toISOString();
+  const ageMinutes = (Date.now() - new Date(ts).getTime()) / 60000;
+  const stale = !Number.isFinite(ageMinutes) || ageMinutes > 90;
+
+  return [
+    {
+      source: 'CPCB / State PCB Station Snapshot',
+      data: `PM2.5 ~${city.baselinePm25}, PM10 ~${city.baselinePm10}, NO₂ ~${city.baselineNo2} µg/m³`,
+      frequency: 'Hourly station snapshot',
+      reliability: stale ? 'low' : 'high',
+      stale,
+      lastUpdatedIso: ts,
+      fallbackAction: 'Use last timestamped reading with lowered confidence and verify via Agent 1 Search.',
+    },
+    {
+      source: 'Google Search Grounding (Agent 1 & 2)',
+      data: 'Live CPCB bulletins, GRAP alerts & regional weather wind forecast',
+      frequency: 'On-demand per run',
+      reliability: 'high',
+      stale: false,
+      lastUpdatedIso: ts,
+      fallbackAction: 'Display deterministic inversion model labeled explicitly as modeled estimate.',
+    },
+    {
+      source: 'Google Maps Grounding (Agent 4 & Emergency)',
+      data: 'Verified Metro/transit hubs, quieter corridors & 24h emergency hospitals',
+      frequency: 'On-demand with city coordinates',
+      reliability: 'high',
+      stale: false,
+      lastUpdatedIso: ts,
+      fallbackAction: 'Show direct 112 / 102 dial links without inventing unverified landmarks.',
+    },
+    {
+      source: 'Community Pulse 2.0 Clusters',
+      data: 'Neighborhood smoke, burning & dust reports (PII redacted)',
+      frequency: 'Real-time 45-min H3 corroboration',
+      reliability: 'medium',
+      stale: false,
+      lastUpdatedIso: ts,
+      fallbackAction: 'Treat <3 reports as unconfirmed single observations.',
+    },
+  ];
+}
+
 

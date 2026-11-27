@@ -23,7 +23,7 @@
         },
         "budgetTier": {
           "type": "string",
-          "enum": ["inr_0", "under_500", "under_2000", "under_5000", "under_10000"]
+          "enum": ["inr_0", "under_500", "under_2000", "under_5000", "under_10000", "custom"]
         },
         "eli10": {
           "type": "boolean"

@@ -21,6 +21,8 @@ export const DigitalTwinView: React.FC<Props> = React.memo(({ household }) => {
   const [roomSealed, setRoomSealed] = useState(true);
   const [purifierActive, setPurifierActive] = useState(true);
   const [purifierHours, setPurifierHours] = useState(4);
+  const [durationMin, setDurationMin] = useState(35);
+  const [maskProtection, setMaskProtection] = useState<'none' | 'surgical' | 'n95'>('none');
 
   // Instant O(1) memoized simulation — zero redundant network roundtrips on slider drag
   const result = useMemo(
@@ -29,11 +31,23 @@ export const DigitalTwinView: React.FC<Props> = React.memo(({ household }) => {
         presetId,
         ambientPm25: household.city.baselinePm25,
         roomSqft: household.roomSqft,
-        durationMin: 35,
+        durationMin,
         purifierHours,
         roomSealed,
+        timeSlot: household.schoolTime,
+        indoorChoice: roomSealed,
+        maskProtection,
       }),
-    [presetId, household.city.baselinePm25, household.roomSqft, purifierHours, roomSealed],
+    [
+      presetId,
+      household.city.baselinePm25,
+      household.roomSqft,
+      household.schoolTime,
+      durationMin,
+      purifierHours,
+      roomSealed,
+      maskProtection,
+    ],
   );
 
   return (
@@ -61,7 +75,23 @@ export const DigitalTwinView: React.FC<Props> = React.memo(({ household }) => {
               Air Quality Digital Twin — &quot;What-If&quot; Scenario Comparison
             </h1>
           </div>
-          <div className="flex items-center gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-4 text-xs">
+            <label htmlFor="twin-duration-slider" className="flex items-center gap-2 font-medium">
+              Duration:
+              <input
+                id="twin-duration-slider"
+                type="range"
+                min={15}
+                max={120}
+                step={5}
+                value={durationMin}
+                aria-valuetext={`${durationMin} minutes`}
+                onChange={(e) => setDurationMin(Number(e.target.value))}
+                className="accent-[#0F766E]"
+              />
+              <span className="font-mono-tabular font-semibold">{durationMin}m</span>
+            </label>
+
             <label htmlFor="purifier-runtime-slider" className="flex items-center gap-2 font-medium">
               Purifier Runtime:
               <input
@@ -70,10 +100,27 @@ export const DigitalTwinView: React.FC<Props> = React.memo(({ household }) => {
                 min={1}
                 max={12}
                 value={purifierHours}
+                aria-valuetext={`${purifierHours} hours`}
                 onChange={(e) => setPurifierHours(Number(e.target.value))}
                 className="accent-[#0F766E]"
               />
               <span className="font-mono-tabular font-semibold">{purifierHours}h</span>
+            </label>
+
+            <label className="flex items-center gap-1.5 font-medium">
+              Protection:
+              <select
+                aria-label="Mask protection level"
+                value={maskProtection}
+                onChange={(e) =>
+                  setMaskProtection(e.target.value as 'none' | 'surgical' | 'n95')
+                }
+                className="min-h-[34px] px-2 rounded-lg border border-[#E2DDD2] dark:border-[#283836] bg-[#FAF7F2] dark:bg-[#0E1514]"
+              >
+                <option value="none">No Mask</option>
+                <option value="surgical">Surgical Mask</option>
+                <option value="n95">Fitted N95</option>
+              </select>
             </label>
           </div>
         </div>

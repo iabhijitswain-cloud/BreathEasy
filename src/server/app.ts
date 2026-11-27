@@ -221,6 +221,9 @@ export function createApiApp(options?: {
       createdAtIso: new Date().toISOString(),
     };
     communityReports.unshift(created);
+    if (communityReports.length > 200) {
+      communityReports.length = 200;
+    }
     return res.status(201).json({ report: created, clustered: false });
   });
 

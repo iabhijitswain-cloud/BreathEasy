@@ -50,20 +50,47 @@ export const EmergencyOverlay: React.FC<Props> = React.memo(function EmergencyOv
   const [placesLinks, setPlacesLinks] = useState<GroundingLink[]>([]);
   const [placesError, setPlacesError] = useState<string | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
     closeButtonRef.current?.focus();
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         onClose();
+        return;
+      }
+      if (e.key === 'Tab' && dialogRef.current) {
+        const focusables = dialogRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        );
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      previousFocusRef.current?.focus();
+    };
   }, [open, onClose]);
 
   if (!open) return null;
+
+  const sanitizedContact = household.localEmergencyContact
+    ? household.localEmergencyContact.replace(/[^0-9+\-\s]/g, '').trim()
+    : '';
 
   const currentStep = EMERGENCY_STEPS[stepIndex];
 
@@ -102,6 +129,7 @@ export const EmergencyOverlay: React.FC<Props> = React.memo(function EmergencyOv
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby="emergency-overlay-title"
@@ -151,6 +179,14 @@ export const EmergencyOverlay: React.FC<Props> = React.memo(function EmergencyOv
           >
             <PhoneCall className="w-5 h-5" aria-hidden="true" /> Call Ambulance 102
           </a>
+          {sanitizedContact && (
+            <a
+              href={`tel:${sanitizedContact}`}
+              className="sm:col-span-2 min-h-[48px] px-5 py-2.5 rounded-xl bg-[#0F766E] hover:bg-[#0D625B] text-white font-display text-base font-bold flex items-center justify-center gap-2"
+            >
+              <PhoneCall className="w-4 h-4" aria-hidden="true" /> Call Saved Local Contact ({sanitizedContact})
+            </a>
+          )}
         </div>
 
         {/* One Primary Step at a Time */}
