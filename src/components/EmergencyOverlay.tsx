@@ -9,6 +9,7 @@ import {
   Loader2,
   ShieldAlert,
 } from 'lucide-react';
+import { postJson } from '../lib/apiClient.ts';
 import { sanitizeHttpUrl } from '../lib/deterministicEngines.ts';
 import type { GroundingLink, HouseholdState } from '../types/breatheasy.ts';
 
@@ -37,7 +38,12 @@ const EMERGENCY_STEPS = [
   },
 ];
 
-export const EmergencyOverlay: React.FC<Props> = ({ open, reason, household, onClose }) => {
+export const EmergencyOverlay: React.FC<Props> = React.memo(function EmergencyOverlay({
+  open,
+  reason,
+  household,
+  onClose,
+}) {
   const [stepIndex, setStepIndex] = useState(0);
   const [loadingPlaces, setLoadingPlaces] = useState(false);
   const [placesSummary, setPlacesSummary] = useState<string | null>(null);
@@ -75,21 +81,14 @@ export const EmergencyOverlay: React.FC<Props> = ({ open, reason, household, onC
     setLoadingPlaces(true);
     setPlacesError(null);
     try {
-      const res = await fetch('/api/emergency/resources', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          lat: household.city.lat,
-          lng: household.city.lng,
-          cityName: `${household.city.locality}, ${household.city.name}`,
-        }),
+      const data = await postJson<
+        { lat: number; lng: number; cityName: string },
+        { summary?: string; places?: GroundingLink[] }
+      >('/api/emergency/resources', {
+        lat: household.city.lat,
+        lng: household.city.lng,
+        cityName: `${household.city.locality}, ${household.city.name}`,
       });
-      const data = (await res.json()) as {
-        summary?: string;
-        places?: GroundingLink[];
-        error?: string;
-      };
-      if (!res.ok) throw new Error(data.error || 'Could not look up nearby hospitals.');
       setPlacesSummary(data.summary || null);
       setPlacesLinks(Array.isArray(data.places) ? data.places : []);
     } catch (err: unknown) {
@@ -255,4 +254,4 @@ export const EmergencyOverlay: React.FC<Props> = ({ open, reason, household, onC
       </div>
     </div>
   );
-};
+});

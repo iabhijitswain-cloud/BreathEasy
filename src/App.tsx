@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged, type User } from 'firebase/auth';
 import {
   PhoneCall,
@@ -11,6 +11,7 @@ import {
   LogIn,
   LogOut,
 } from 'lucide-react';
+import { postJson } from './lib/apiClient.ts';
 import { CITY_PRESETS, DEFAULT_MEMBERS } from './lib/deterministicEngines.ts';
 import {
   auth,
@@ -29,10 +30,22 @@ import type {
   SupportedLanguage,
 } from './types/breatheasy.ts';
 import { ProtectionBriefView } from './components/ProtectionBriefView.tsx';
-import { AgentsPipelineView, ORDERED_AGENTS } from './components/AgentsPipelineView.tsx';
-import { DigitalTwinView } from './components/DigitalTwinView.tsx';
-import { IndoorCommunityView } from './components/IndoorCommunityView.tsx';
-import { EmergencyOverlay } from './components/EmergencyOverlay.tsx';
+import { AGENT_SEQUENCE } from './lib/agentCatalog.ts';
+
+const AgentsPipelineView = lazy(() =>
+  import('./components/AgentsPipelineView.tsx').then((m) => ({ default: m.AgentsPipelineView })),
+);
+const DigitalTwinView = lazy(() =>
+  import('./components/DigitalTwinView.tsx').then((m) => ({ default: m.DigitalTwinView })),
+);
+const IndoorCommunityView = lazy(() =>
+  import('./components/IndoorCommunityView.tsx').then((m) => ({
+    default: m.IndoorCommunityView,
+  })),
+);
+const EmergencyOverlay = lazy(() =>
+  import('./components/EmergencyOverlay.tsx').then((m) => ({ default: m.EmergencyOverlay })),
+);
 
 type ActiveTab = 'brief' | 'agents' | 'twin' | 'indoor';
 
@@ -51,6 +64,18 @@ const DEFAULT_HOUSEHOLD: HouseholdState = {
   schoolTime: '07:45 AM',
   members: DEFAULT_MEMBERS,
 };
+
+function PanelLoader() {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="rounded-2xl bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] p-8 text-center text-sm text-[#4B5B59] dark:text-[#A7B8B5]"
+    >
+      Loading BreathEasy module...
+    </div>
+  );
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('brief');
@@ -84,6 +109,7 @@ export default function App() {
 
   const [emergencyOpen, setEmergencyOpen] = useState(false);
   const [emergencyReason, setEmergencyReason] = useState<string | null>(null);
+  const skipNextRemoteSyncRef = useRef(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', darkMode);
@@ -99,6 +125,7 @@ export default function App() {
           .then((stored) => {
             if (!stored) return;
             const foundCity = CITY_PRESETS.find((c) => c.id === stored.cityId);
+            skipNextRemoteSyncRef.current = true;
             setHousehold((prev) => ({
               ...prev,
               city: foundCity || prev.city,
@@ -114,6 +141,7 @@ export default function App() {
     return () => unsub();
   }, []);
 
+  // Debounce Firestore persistence (800ms) and avoid writing back hydrated snapshots
   useEffect(() => {
     if (!personalizationEnabled) return;
     try {
@@ -121,12 +149,18 @@ export default function App() {
     } catch {
       // Ignore quota errors
     }
-    if (authReady && user?.emailVerified) {
-      void saveHouseholdPreferencesToFirestore(user.uid, household).catch(() => {});
+    if (!authReady || !user?.emailVerified) return;
+    if (skipNextRemoteSyncRef.current) {
+      skipNextRemoteSyncRef.current = false;
+      return;
     }
+    const timer = window.setTimeout(() => {
+      void saveHouseholdPreferencesToFirestore(user.uid, household).catch(() => {});
+    }, 800);
+    return () => window.clearTimeout(timer);
   }, [household, personalizationEnabled, authReady, user]);
 
-  const handleSignIn = async () => {
+  const handleSignIn = useCallback(async () => {
     setAuthMessage(null);
     try {
       await signInWithGoogle();
@@ -135,73 +169,68 @@ export default function App() {
         err instanceof Error ? err.message : 'Google Sign-In could not be completed.',
       );
     }
-  };
+  }, []);
 
-  const handleSignOut = async () => {
+  const handleSignOut = useCallback(async () => {
     setAuthMessage(null);
     try {
       await signOutUser();
     } catch {
       // Ignore sign-out errors
     }
-  };
+  }, []);
 
-  const runAgent = async (
-    agentId: AgentId,
-    priorSnapshot?: Partial<Record<AgentId, AgentRunResult>>,
-    overrideImage?: { base64: string; mimeType: string; note?: string },
-  ): Promise<AgentRunResult | null> => {
-    setRunningAgent(agentId);
-    const meta = ORDERED_AGENTS.find((a) => a.id === agentId)!;
-    try {
-      const res = await fetch('/api/agents/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+  const runAgent = useCallback(
+    async (
+      agentId: AgentId,
+      priorSnapshot?: Partial<Record<AgentId, AgentRunResult>>,
+      overrideImage?: { base64: string; mimeType: string; note?: string },
+    ): Promise<AgentRunResult | null> => {
+      setRunningAgent(agentId);
+      const meta = AGENT_SEQUENCE.find((a) => a.id === agentId)!;
+      try {
+        const data = await postJson<Record<string, unknown>, AgentRunResult>('/api/agents/run', {
           agentId,
           household,
           priorOutputs: priorSnapshot ?? agentOutputs,
           roomImageBase64: overrideImage?.base64 ?? roomImageBase64,
           roomImageMimeType: overrideImage?.mimeType ?? roomImageMimeType,
           indoorNote: overrideImage?.note,
-        }),
-      });
-      const data = (await res.json()) as AgentRunResult & { error?: string };
-      if (!res.ok) {
-        throw new Error(data.error || `Agent ${meta.number} failed.`);
+        });
+        setAgentOutputs((prev) => ({ ...prev, [agentId]: data }));
+        return data;
+      } catch (err: unknown) {
+        const errorResult: AgentRunResult = {
+          agentId,
+          agentNumber: meta.number,
+          agentName: meta.name,
+          modelUsed: 'gemini-4-hydrogen',
+          groundingType: 'deterministic_plus_gemini',
+          status: 'error',
+          summary: 'Execution failed',
+          content: '',
+          confidence: 'low',
+          latencyMs: 0,
+          timestampIso: new Date().toISOString(),
+          groundingLinks: [],
+          error: err instanceof Error ? err.message : 'Unable to execute agent.',
+        };
+        setAgentOutputs((prev) => ({ ...prev, [agentId]: errorResult }));
+        return null;
+      } finally {
+        setRunningAgent(null);
       }
-      setAgentOutputs((prev) => ({ ...prev, [agentId]: data }));
-      return data;
-    } catch (err: unknown) {
-      const errorResult: AgentRunResult = {
-        agentId,
-        agentNumber: meta.number,
-        agentName: meta.name,
-        modelUsed: 'gemini-4-hydrogen',
-        groundingType: 'deterministic_plus_gemini',
-        status: 'error',
-        summary: 'Execution failed',
-        content: '',
-        confidence: 'low',
-        latencyMs: 0,
-        timestampIso: new Date().toISOString(),
-        groundingLinks: [],
-        error: err instanceof Error ? err.message : 'Unable to execute agent.',
-      };
-      setAgentOutputs((prev) => ({ ...prev, [agentId]: errorResult }));
-      return null;
-    } finally {
-      setRunningAgent(null);
-    }
-  };
+    },
+    [agentOutputs, household, roomImageBase64, roomImageMimeType],
+  );
 
-  const handleRunAllSequentially = async () => {
+  const handleRunAllSequentially = useCallback(async () => {
     if (sequentialRunning || runningAgent) return;
     setSequentialRunning(true);
     setAgentOutputs({});
     const accumulated: Partial<Record<AgentId, AgentRunResult>> = {};
     try {
-      for (const agent of ORDERED_AGENTS) {
+      for (const agent of AGENT_SEQUENCE) {
         const result = await runAgent(agent.id, accumulated);
         if (result) {
           accumulated[agent.id] = result;
@@ -210,19 +239,18 @@ export default function App() {
     } finally {
       setSequentialRunning(false);
     }
-  };
+  }, [runAgent, runningAgent, sequentialRunning]);
 
-  const handleUploadAndRunIndoorAgent = async (
-    base64: string,
-    mimeType: string,
-    note: string,
-  ) => {
-    setRoomImageBase64(base64);
-    setRoomImageMimeType(mimeType);
-    await runAgent('indoor_air', agentOutputs, { base64, mimeType, note });
-  };
+  const handleUploadAndRunIndoorAgent = useCallback(
+    async (base64: string, mimeType: string, note: string) => {
+      setRoomImageBase64(base64);
+      setRoomImageMimeType(mimeType);
+      await runAgent('indoor_air', agentOutputs, { base64, mimeType, note });
+    },
+    [agentOutputs, runAgent],
+  );
 
-  const handleResetPreferences = () => {
+  const handleResetPreferences = useCallback(() => {
     try {
       localStorage.removeItem(STORAGE_KEY);
     } catch {
@@ -230,38 +258,48 @@ export default function App() {
     }
     setHousehold(DEFAULT_HOUSEHOLD);
     setAgentOutputs({});
-  };
+  }, []);
 
-  const handleToggleMemberPrivacy = (id: string) => {
+  const handleUpdateHouseholdMeta = useCallback(
+    (patch: Partial<Pick<HouseholdState, 'roomSqft' | 'housingType'>>) => {
+      setHousehold((prev) => ({ ...prev, ...patch }));
+    },
+    [],
+  );
+
+  const handleToggleMemberPrivacy = useCallback((id: string) => {
     setHousehold((prev) => ({
       ...prev,
       members: prev.members.map((m) =>
         m.id === id ? { ...m, privacyMasked: !m.privacyMasked } : m,
       ),
     }));
-  };
+  }, []);
 
-  const handleAddFamilyMember = (label: string, category: FamilyMemberProfile['category']) => {
-    const sensitivity: FamilyMemberProfile['sensitivity'] =
-      category === 'infant' || category === 'respiratory_sensitive' || category === 'elderly'
-        ? 'high_protection'
-        : category === 'child' || category === 'pet'
-          ? 'elevated'
-          : 'standard';
-    setHousehold((prev) => ({
-      ...prev,
-      members: [
-        ...prev.members,
-        {
-          id: `mem_${Date.now()}`,
-          label,
-          category,
-          sensitivity,
-          privacyMasked: false,
-        },
-      ],
-    }));
-  };
+  const handleAddFamilyMember = useCallback(
+    (label: string, category: FamilyMemberProfile['category']) => {
+      const sensitivity: FamilyMemberProfile['sensitivity'] =
+        category === 'infant' || category === 'respiratory_sensitive' || category === 'elderly'
+          ? 'high_protection'
+          : category === 'child' || category === 'pet'
+            ? 'elevated'
+            : 'standard';
+      setHousehold((prev) => ({
+        ...prev,
+        members: [
+          ...prev.members,
+          {
+            id: `mem_${Date.now()}`,
+            label,
+            category,
+            sensitivity,
+            privacyMasked: false,
+          },
+        ],
+      }));
+    },
+    [],
+  );
 
   const tabs: { id: ActiveTab; label: string; mobileLabel: string }[] = [
     { id: 'brief', label: 'Protection Brief', mobileLabel: 'Brief' },
@@ -279,7 +317,6 @@ export default function App() {
         Skip to main content
       </a>
 
-      {/* Top Bar Contract: Wordmark — 4 Nav Links — Primary CTA */}
       <header className="sticky top-0 z-30 border-b border-[#E2DDD2] dark:border-[#283836] bg-[#FAF7F2]/95 dark:bg-[#0E1514]/95 backdrop-blur-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2.5 shrink-0">
@@ -305,7 +342,7 @@ export default function App() {
                 aria-controls={`panel-${item.id}`}
                 type="button"
                 onClick={() => setActiveTab(item.id)}
-                className={`whitespace-nowrap shrink-0 py-1.5 border-b-2 transition-colors cursor-pointer ${
+                className={`whitespace-nowrap shrink-0 py-1.5 border-b-2 transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F766E] ${
                   activeTab === item.id
                     ? 'border-[#0F766E] text-[#0F766E] dark:border-[#2DD4BF] dark:text-[#2DD4BF] font-semibold'
                     : 'border-transparent text-[#4B5B59] dark:text-[#A7B8B5] hover:text-[#1A2423] dark:hover:text-[#F1F5F4]'
@@ -322,14 +359,13 @@ export default function App() {
               setEmergencyReason(null);
               setEmergencyOpen(true);
             }}
-            className="min-h-[42px] px-4 py-2 rounded-xl bg-[#C2410C] hover:bg-[#9A3412] text-white text-xs sm:text-sm font-semibold flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer"
+            className="min-h-[42px] px-4 py-2 rounded-xl bg-[#C2410C] hover:bg-[#9A3412] text-white text-xs sm:text-sm font-semibold flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#C2410C]"
           >
             <PhoneCall className="w-4 h-4" aria-hidden="true" />
             Emergency 112
           </button>
         </div>
 
-        {/* Mobile Tab Switcher */}
         <div
           role="tablist"
           aria-label="Mobile sections"
@@ -354,12 +390,14 @@ export default function App() {
         </div>
       </header>
 
-      {/* Workspace Control Strip */}
       <div className="border-b border-[#E2DDD2] dark:border-[#283836] bg-[#F0ECE3]/75 dark:bg-[#16201F]/70">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex flex-wrap items-center gap-2.5">
             <label className="inline-flex items-center gap-1.5 font-medium">
-              <MapPin className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]" aria-hidden="true" />
+              <MapPin
+                className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]"
+                aria-hidden="true"
+              />
               <select
                 aria-label="City Preset"
                 value={household.city.id}
@@ -378,7 +416,10 @@ export default function App() {
             </label>
 
             <label className="inline-flex items-center gap-1.5 font-medium">
-              <Wallet className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]" aria-hidden="true" />
+              <Wallet
+                className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]"
+                aria-hidden="true"
+              />
               <select
                 aria-label="Budget Tier"
                 value={household.budgetTier}
@@ -483,13 +524,8 @@ export default function App() {
         )}
       </div>
 
-      {/* Main Content */}
       <main id="main-content" className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
-        <div
-          id={`panel-${activeTab}`}
-          role="tabpanel"
-          aria-labelledby={`tab-${activeTab}`}
-        >
+        <div id={`panel-${activeTab}`} role="tabpanel" aria-labelledby={`tab-${activeTab}`}>
           {activeTab === 'brief' && (
             <ProtectionBriefView
               household={household}
@@ -497,6 +533,7 @@ export default function App() {
               personalizationEnabled={personalizationEnabled}
               onTogglePersonalization={() => setPersonalizationEnabled((v) => !v)}
               onResetPreferences={handleResetPreferences}
+              onUpdateHouseholdMeta={handleUpdateHouseholdMeta}
               onEmergencyTrigger={(reason) => {
                 setEmergencyReason(reason);
                 setEmergencyOpen(true);
@@ -506,52 +543,63 @@ export default function App() {
           )}
 
           {activeTab === 'agents' && (
-            <AgentsPipelineView
-              household={household}
-              outputs={agentOutputs}
-              runningAgent={runningAgent}
-              sequentialRunning={sequentialRunning}
-              roomImageBase64={roomImageBase64}
-              roomImageMimeType={roomImageMimeType}
-              onUploadRoomPhoto={(b64, mime) => {
-                setRoomImageBase64(b64);
-                setRoomImageMimeType(mime);
-              }}
-              onRunSingleAgent={async (id) => {
-                await runAgent(id);
-              }}
-              onRunAllSequentially={handleRunAllSequentially}
-            />
+            <Suspense fallback={<PanelLoader />}>
+              <AgentsPipelineView
+                household={household}
+                outputs={agentOutputs}
+                runningAgent={runningAgent}
+                sequentialRunning={sequentialRunning}
+                roomImageBase64={roomImageBase64}
+                roomImageMimeType={roomImageMimeType}
+                onUploadRoomPhoto={(b64, mime) => {
+                  setRoomImageBase64(b64);
+                  setRoomImageMimeType(mime);
+                }}
+                onRunSingleAgent={async (id) => {
+                  await runAgent(id);
+                }}
+                onRunAllSequentially={handleRunAllSequentially}
+              />
+            </Suspense>
           )}
 
-          {activeTab === 'twin' && <DigitalTwinView household={household} />}
+          {activeTab === 'twin' && (
+            <Suspense fallback={<PanelLoader />}>
+              <DigitalTwinView household={household} />
+            </Suspense>
+          )}
 
           {activeTab === 'indoor' && (
-            <IndoorCommunityView
-              household={household}
-              indoorAgentOutput={agentOutputs.indoor_air}
-              runningIndoorAgent={runningAgent === 'indoor_air'}
-              onUploadAndRunIndoorAgent={handleUploadAndRunIndoorAgent}
-              onToggleMemberPrivacy={handleToggleMemberPrivacy}
-              onAddFamilyMember={handleAddFamilyMember}
-            />
+            <Suspense fallback={<PanelLoader />}>
+              <IndoorCommunityView
+                household={household}
+                indoorAgentOutput={agentOutputs.indoor_air}
+                runningIndoorAgent={runningAgent === 'indoor_air'}
+                onUploadAndRunIndoorAgent={handleUploadAndRunIndoorAgent}
+                onToggleMemberPrivacy={handleToggleMemberPrivacy}
+                onAddFamilyMember={handleAddFamilyMember}
+              />
+            </Suspense>
           )}
         </div>
       </main>
 
-      {/* Calm Persistent Non-Medical Disclaimer Footer */}
       <footer className="border-t border-[#E2DDD2] dark:border-[#283836] py-4 px-4 text-center text-xs text-[#4B5B59] dark:text-[#A7B8B5]">
         BreathEasy AI provides environmental exposure estimates and protective guidance only — not
         medical diagnosis or emergency dispatch. Exposure values marked as modeled are estimates,
         not personal sensor measurements.
       </footer>
 
-      <EmergencyOverlay
-        open={emergencyOpen}
-        reason={emergencyReason}
-        household={household}
-        onClose={() => setEmergencyOpen(false)}
-      />
+      {emergencyOpen && (
+        <Suspense fallback={null}>
+          <EmergencyOverlay
+            open={emergencyOpen}
+            reason={emergencyReason}
+            household={household}
+            onClose={() => setEmergencyOpen(false)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

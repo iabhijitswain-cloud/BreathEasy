@@ -1,5 +1,16 @@
 import { z } from 'zod';
 
+export const agentIdEnum = z.enum([
+  'env_intelligence',
+  'predictive_risk',
+  'family_health',
+  'mobility_route',
+  'indoor_air',
+  'community_intel',
+  'action_planner',
+  'verification_safety',
+]);
+
 export const cityPresetSchema = z.object({
   id: z.string().min(2).max(64).regex(/^[a-z0-9_]+$/),
   name: z.string().min(1).max(80),
@@ -84,19 +95,21 @@ export const indoorSimulateSchema = z.object({
   hepaPurifier: z.boolean(),
 });
 
+const priorOutputEntrySchema = z.object({
+  agentId: agentIdEnum,
+  agentNumber: z.number().int().min(1).max(8),
+  agentName: z.string().min(1).max(120),
+  summary: z.string().max(300).optional().default(''),
+  content: z.string().max(12000),
+});
+
 export const agentRunSchema = z.object({
-  agentId: z.enum([
-    'env_intelligence',
-    'predictive_risk',
-    'family_health',
-    'mobility_route',
-    'indoor_air',
-    'community_intel',
-    'action_planner',
-    'verification_safety',
-  ]),
+  agentId: agentIdEnum,
   household: householdSchema,
-  priorOutputs: z.record(z.string(), z.unknown()).optional().default({}),
+  priorOutputs: z
+    .partialRecord(agentIdEnum, priorOutputEntrySchema)
+    .optional()
+    .default({}),
   roomImageBase64: z
     .string()
     .max(4_000_000)

@@ -74,12 +74,12 @@ describe('BreathEasy AI UI & Accessibility', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: '8-Agent Pipeline' }));
     expect(
-      screen.getByRole('heading', { name: /8-Agent Pipeline \(Run & Verify One by One\)/i }),
+      await screen.findByRole('heading', { name: /8-Agent Pipeline \(Run & Verify One by One\)/i }),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('tab', { name: '3D Digital Twin' }));
     expect(
-      screen.getByRole('region', {
+      await screen.findByRole('region', {
         name: /Interactive 3D Household and Street Airshed Digital Twin/i,
       }),
     ).toBeInTheDocument();
@@ -90,10 +90,17 @@ describe('BreathEasy AI UI & Accessibility', () => {
     ).toBeInTheDocument();
   });
 
-  it('opens high-contrast Emergency 112 dialog and closes on Escape key', () => {
+  it('opens Memory & Home Settings, updates safe room size, and opens Emergency 112 dialog', async () => {
     render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Memory & Home Settings/i }));
+    const roomInput = screen.getByLabelText(/Safe Room Size \(sq ft\):/i) as HTMLInputElement;
+    expect(roomInput.value).toBe('140');
+    fireEvent.change(roomInput, { target: { value: '220' } });
+    expect(roomInput.value).toBe('220');
+
     fireEvent.click(screen.getByRole('button', { name: /Emergency 112/i }));
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(screen.getByText(/Call National Emergency 112/i)).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: 'Escape' });

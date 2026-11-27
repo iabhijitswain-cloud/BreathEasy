@@ -647,6 +647,19 @@ export const AirQuality3DScene: React.FC<AirQuality3DProps> = ({
 
     function tick(now: number) {
       if (disposed) return;
+      if (document.visibilityState === 'hidden') {
+        lastTime = now;
+        frameId = window.setTimeout(() => {
+          if (!disposed) {
+            if (isSoftwareGl) {
+              tick(performance.now());
+            } else {
+              frameId = requestAnimationFrame(tick);
+            }
+          }
+        }, 250);
+        return;
+      }
       const dt = Math.min(0.05, Math.max(0.001, (now - lastTime) / 1000));
       lastTime = now;
 
@@ -756,6 +769,16 @@ export const AirQuality3DScene: React.FC<AirQuality3DProps> = ({
       renderer.domElement.removeEventListener('webglcontextlost', handleContextLost);
       renderer.domElement.removeEventListener('webglcontextrestored', handleContextRestored);
       controls.dispose();
+      scene.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose();
+          if (Array.isArray(obj.material)) {
+            obj.material.forEach((m) => m.dispose());
+          } else {
+            obj.material.dispose();
+          }
+        }
+      });
       roadTex.dispose();
       tileTex.dispose();
       shadowTex.dispose();
@@ -766,8 +789,12 @@ export const AirQuality3DScene: React.FC<AirQuality3DProps> = ({
 
   if (webglError) {
     return (
-      <div className="w-full h-[520px] rounded-2xl border border-[#E2DDD2] dark:border-[#283836] bg-[#F0ECE3] dark:bg-[#16201F] flex flex-col items-center justify-center p-6 text-center">
-        <Wind className="w-10 h-10 text-[#0F766E] mb-3" />
+      <div
+        role="status"
+        aria-live="polite"
+        className="w-full h-[520px] rounded-2xl border border-[#E2DDD2] dark:border-[#283836] bg-[#F0ECE3] dark:bg-[#16201F] flex flex-col items-center justify-center p-6 text-center"
+      >
+        <Wind className="w-10 h-10 text-[#0F766E] mb-3" aria-hidden="true" />
         <p className="font-display font-semibold text-lg">{webglError}</p>
         <p className="text-sm text-[#4B5B59] dark:text-[#A7B8B5] mt-1">
           Simulation physics remain active in the comparison panel below.

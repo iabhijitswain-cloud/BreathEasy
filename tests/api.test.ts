@@ -92,4 +92,41 @@ describe('Express API routes & security headers', () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it('rejects invalid cityId query parameters, empty ask questions, and out-of-range coordinates', async () => {
+    const badCity = await request(app).get('/api/community/reports?cityId=bad-city!');
+    expect(badCity.status).toBe(400);
+
+    const emptyAsk = await request(app).post('/api/ask').send({
+      question: '   ',
+      household: validHousehold,
+    });
+    expect(emptyAsk.status).toBe(400);
+
+    const badCoords = await request(app).post('/api/emergency/resources').send({
+      lat: 120,
+      lng: 77.2,
+      cityName: 'Delhi NCR',
+    });
+    expect(badCoords.status).toBe(400);
+  });
+
+  it('enforces sliding-window rate limits on guarded endpoints', async () => {
+    const limitedApp = createApiApp({ rateLimitMax: 2 });
+    const reqBody = {
+      cityId: 'delhi_mayur_vihar',
+      category: 'smoke',
+      severity: 'mild',
+      note: 'Light smoke test',
+    };
+
+    const r1 = await request(limitedApp).post('/api/community/reports').send(reqBody);
+    const r2 = await request(limitedApp).post('/api/community/reports').send(reqBody);
+    const r3 = await request(limitedApp).post('/api/community/reports').send(reqBody);
+
+    expect(r1.status).toBe(201);
+    expect(r2.status).toBe(200);
+    expect(r3.status).toBe(429);
+    expect(r3.body.error).toMatch(/Too many requests/i);
+  });
 });

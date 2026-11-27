@@ -1,12 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Clock, IndianRupee, Leaf, Gauge } from 'lucide-react';
 import { AirQuality3DScene } from './AirQuality3DScene.tsx';
 import { runDigitalTwinSimulation } from '../lib/deterministicEngines.ts';
-import type {
-  HouseholdState,
-  TwinScenarioInput,
-  TwinScenarioResult,
-} from '../types/breatheasy.ts';
+import type { HouseholdState, TwinScenarioInput } from '../types/breatheasy.ts';
 
 interface Props {
   household: HouseholdState;
@@ -20,48 +16,25 @@ const PRESETS: { id: TwinScenarioInput['presetId']; label: string }[] = [
   { id: 'purifier_4h', label: 'Run HEPA Purifier 4h' },
 ];
 
-export const DigitalTwinView: React.FC<Props> = ({ household }) => {
+export const DigitalTwinView: React.FC<Props> = React.memo(({ household }) => {
   const [presetId, setPresetId] = useState<TwinScenarioInput['presetId']>('metro_vs_auto');
   const [roomSealed, setRoomSealed] = useState(true);
   const [purifierActive, setPurifierActive] = useState(true);
   const [purifierHours, setPurifierHours] = useState(4);
-  const [result, setResult] = useState<TwinScenarioResult>(() =>
-    runDigitalTwinSimulation({
-      presetId: 'metro_vs_auto',
-      ambientPm25: household.city.baselinePm25,
-      roomSqft: household.roomSqft,
-      durationMin: 35,
-      purifierHours: 4,
-      roomSealed: true,
-    }),
-  );
 
-  useEffect(() => {
-    let active = true;
-    const payload: TwinScenarioInput = {
-      presetId,
-      ambientPm25: household.city.baselinePm25,
-      roomSqft: household.roomSqft,
-      durationMin: 35,
-      purifierHours,
-      roomSealed,
-    };
-    fetch('/api/twin/simulate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-      .then((r) => r.json())
-      .then((data: TwinScenarioResult) => {
-        if (active && data?.title) setResult(data);
-      })
-      .catch(() => {
-        if (active) setResult(runDigitalTwinSimulation(payload));
-      });
-    return () => {
-      active = false;
-    };
-  }, [presetId, household.city.baselinePm25, household.roomSqft, purifierHours, roomSealed]);
+  // Instant O(1) memoized simulation — zero redundant network roundtrips on slider drag
+  const result = useMemo(
+    () =>
+      runDigitalTwinSimulation({
+        presetId,
+        ambientPm25: household.city.baselinePm25,
+        roomSqft: household.roomSqft,
+        durationMin: 35,
+        purifierHours,
+        roomSealed,
+      }),
+    [presetId, household.city.baselinePm25, household.roomSqft, purifierHours, roomSealed],
+  );
 
   return (
     <div className="space-y-6">
@@ -213,4 +186,5 @@ export const DigitalTwinView: React.FC<Props> = ({ household }) => {
       </section>
     </div>
   );
-};
+});
+DigitalTwinView.displayName = 'DigitalTwinView';
