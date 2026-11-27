@@ -1,6 +1,25 @@
-import React, { useEffect, useState } from 'react';
-import { PhoneCall, Moon, Sun, Wind, Baby, MapPin, Wallet } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { onAuthStateChanged, type User } from 'firebase/auth';
+import {
+  PhoneCall,
+  Moon,
+  Sun,
+  Wind,
+  Baby,
+  MapPin,
+  Wallet,
+  LogIn,
+  LogOut,
+} from 'lucide-react';
 import { CITY_PRESETS, DEFAULT_MEMBERS } from './lib/deterministicEngines.ts';
+import {
+  auth,
+  loadHouseholdPreferencesFromFirestore,
+  saveHouseholdPreferencesToFirestore,
+  signInWithGoogle,
+  signOutUser,
+  testFirestoreConnection,
+} from './lib/firebase.ts';
 import type {
   AgentId,
   AgentRunResult,
@@ -37,12 +56,18 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('brief');
   const [darkMode, setDarkMode] = useState(false);
   const [personalizationEnabled, setPersonalizationEnabled] = useState(true);
+  const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
+
   const [household, setHousehold] = useState<HouseholdState>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed?.city?.id) return parsed;
+        const parsed = JSON.parse(saved) as Partial<HouseholdState>;
+        if (parsed?.city?.id) {
+          return { ...DEFAULT_HOUSEHOLD, ...parsed };
+        }
       }
     } catch {
       // Ignore storage errors
@@ -50,16 +75,13 @@ export default function App() {
     return DEFAULT_HOUSEHOLD;
   });
 
-  // Multi-agent orchestration state
   const [agentOutputs, setAgentOutputs] = useState<Partial<Record<AgentId, AgentRunResult>>>({});
   const [runningAgent, setRunningAgent] = useState<AgentId | null>(null);
   const [sequentialRunning, setSequentialRunning] = useState(false);
 
-  // Room vision upload state for Agent 5
   const [roomImageBase64, setRoomImageBase64] = useState<string | undefined>(undefined);
   const [roomImageMimeType, setRoomImageMimeType] = useState<string | undefined>(undefined);
 
-  // Emergency overlay state
   const [emergencyOpen, setEmergencyOpen] = useState(false);
   const [emergencyReason, setEmergencyReason] = useState<string | null>(null);
 
@@ -68,13 +90,61 @@ export default function App() {
   }, [darkMode]);
 
   useEffect(() => {
+    void testFirestoreConnection();
+    const unsub = onAuthStateChanged(auth, (nextUser) => {
+      setUser(nextUser);
+      setAuthReady(true);
+      if (nextUser?.emailVerified) {
+        void loadHouseholdPreferencesFromFirestore(nextUser.uid)
+          .then((stored) => {
+            if (!stored) return;
+            const foundCity = CITY_PRESETS.find((c) => c.id === stored.cityId);
+            setHousehold((prev) => ({
+              ...prev,
+              city: foundCity || prev.city,
+              language: stored.language,
+              budgetTier: stored.budgetTier,
+              eli10: stored.eli10,
+              roomSqft: stored.roomSqft,
+            }));
+          })
+          .catch(() => {});
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
     if (!personalizationEnabled) return;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(household));
     } catch {
       // Ignore quota errors
     }
-  }, [household, personalizationEnabled]);
+    if (authReady && user?.emailVerified) {
+      void saveHouseholdPreferencesToFirestore(user.uid, household).catch(() => {});
+    }
+  }, [household, personalizationEnabled, authReady, user]);
+
+  const handleSignIn = async () => {
+    setAuthMessage(null);
+    try {
+      await signInWithGoogle();
+    } catch (err: unknown) {
+      setAuthMessage(
+        err instanceof Error ? err.message : 'Google Sign-In could not be completed.',
+      );
+    }
+  };
+
+  const handleSignOut = async () => {
+    setAuthMessage(null);
+    try {
+      await signOutUser();
+    } catch {
+      // Ignore sign-out errors
+    }
+  };
 
   const runAgent = async (
     agentId: AgentId,
@@ -96,13 +166,13 @@ export default function App() {
           indoorNote: overrideImage?.note,
         }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as AgentRunResult & { error?: string };
       if (!res.ok) {
         throw new Error(data.error || `Agent ${meta.number} failed.`);
       }
       setAgentOutputs((prev) => ({ ...prev, [agentId]: data }));
-      return data as AgentRunResult;
-    } catch (err: any) {
+      return data;
+    } catch (err: unknown) {
       const errorResult: AgentRunResult = {
         agentId,
         agentNumber: meta.number,
@@ -116,7 +186,7 @@ export default function App() {
         latencyMs: 0,
         timestampIso: new Date().toISOString(),
         groundingLinks: [],
-        error: err?.message || 'Unable to execute agent.',
+        error: err instanceof Error ? err.message : 'Unable to execute agent.',
       };
       setAgentOutputs((prev) => ({ ...prev, [agentId]: errorResult }));
       return null;
@@ -125,7 +195,6 @@ export default function App() {
     }
   };
 
-  // Run all 8 agents sequentially ONE BY ONE, forwarding accumulated outputs to downstream agents
   const handleRunAllSequentially = async () => {
     if (sequentialRunning || runningAgent) return;
     setSequentialRunning(true);
@@ -194,14 +263,28 @@ export default function App() {
     }));
   };
 
+  const tabs: { id: ActiveTab; label: string; mobileLabel: string }[] = [
+    { id: 'brief', label: 'Protection Brief', mobileLabel: 'Brief' },
+    { id: 'agents', label: '8-Agent Pipeline', mobileLabel: '8 Agents' },
+    { id: 'twin', label: '3D Digital Twin', mobileLabel: '3D Twin' },
+    { id: 'indoor', label: 'Indoor & Community', mobileLabel: 'Indoor & Pulse' },
+  ];
+
   return (
     <div className="min-h-screen flex flex-col bg-[#FAF7F2] text-[#1A2423] dark:bg-[#0E1514] dark:text-[#F1F5F4] transition-colors">
-      {/* Top Bar Contract: Single-row 3-zone header (Wordmark — 4 Nav Links — 1 Primary CTA) */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:rounded-lg focus:bg-[#0F766E] focus:text-white focus:text-xs focus:font-semibold"
+      >
+        Skip to main content
+      </a>
+
+      {/* Top Bar Contract: Wordmark — 4 Nav Links — Primary CTA */}
       <header className="sticky top-0 z-30 border-b border-[#E2DDD2] dark:border-[#283836] bg-[#FAF7F2]/95 dark:bg-[#0E1514]/95 backdrop-blur-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2.5 shrink-0">
             <div className="w-9 h-9 rounded-xl bg-[#0F766E] text-white flex items-center justify-center">
-              <Wind className="w-5 h-5" />
+              <Wind className="w-5 h-5" aria-hidden="true" />
             </div>
             <span className="font-display font-bold text-lg tracking-tight whitespace-nowrap">
               BreathEasy AI
@@ -210,18 +293,16 @@ export default function App() {
 
           <nav
             aria-label="Primary sections"
+            role="tablist"
             className="hidden md:flex items-center gap-7 text-sm font-medium"
           >
-            {(
-              [
-                { id: 'brief', label: 'Protection Brief' },
-                { id: 'agents', label: '8-Agent Pipeline' },
-                { id: 'twin', label: '3D Digital Twin' },
-                { id: 'indoor', label: 'Indoor & Community' },
-              ] as const
-            ).map((item) => (
+            {tabs.map((item) => (
               <button
                 key={item.id}
+                id={`tab-${item.id}`}
+                role="tab"
+                aria-selected={activeTab === item.id}
+                aria-controls={`panel-${item.id}`}
                 type="button"
                 onClick={() => setActiveTab(item.id)}
                 className={`whitespace-nowrap shrink-0 py-1.5 border-b-2 transition-colors cursor-pointer ${
@@ -243,23 +324,22 @@ export default function App() {
             }}
             className="min-h-[42px] px-4 py-2 rounded-xl bg-[#C2410C] hover:bg-[#9A3412] text-white text-xs sm:text-sm font-semibold flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer"
           >
-            <PhoneCall className="w-4 h-4" />
+            <PhoneCall className="w-4 h-4" aria-hidden="true" />
             Emergency 112
           </button>
         </div>
 
         {/* Mobile Tab Switcher */}
-        <div className="md:hidden border-t border-[#E2DDD2] dark:border-[#283836] px-3 py-2 flex items-center gap-1.5 overflow-x-auto">
-          {(
-            [
-              { id: 'brief', label: 'Brief' },
-              { id: 'agents', label: '8 Agents' },
-              { id: 'twin', label: '3D Twin' },
-              { id: 'indoor', label: 'Indoor & Pulse' },
-            ] as const
-          ).map((item) => (
+        <div
+          role="tablist"
+          aria-label="Mobile sections"
+          className="md:hidden border-t border-[#E2DDD2] dark:border-[#283836] px-3 py-2 flex items-center gap-1.5 overflow-x-auto"
+        >
+          {tabs.map((item) => (
             <button
               key={item.id}
+              role="tab"
+              aria-selected={activeTab === item.id}
               type="button"
               onClick={() => setActiveTab(item.id)}
               className={`min-h-[38px] px-3 py-1 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
@@ -268,18 +348,18 @@ export default function App() {
                   : 'bg-[#F0ECE3] dark:bg-[#16201F] text-[#4B5B59] dark:text-[#A7B8B5]'
               }`}
             >
-              {item.label}
+              {item.mobileLabel}
             </button>
           ))}
         </div>
       </header>
 
-      {/* Workspace Control Strip (City · Language · Budget · ELI10 · Theme) */}
+      {/* Workspace Control Strip */}
       <div className="border-b border-[#E2DDD2] dark:border-[#283836] bg-[#F0ECE3]/75 dark:bg-[#16201F]/70">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex flex-wrap items-center gap-2.5">
             <label className="inline-flex items-center gap-1.5 font-medium">
-              <MapPin className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]" />
+              <MapPin className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]" aria-hidden="true" />
               <select
                 aria-label="City Preset"
                 value={household.city.id}
@@ -298,7 +378,7 @@ export default function App() {
             </label>
 
             <label className="inline-flex items-center gap-1.5 font-medium">
-              <Wallet className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]" />
+              <Wallet className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]" aria-hidden="true" />
               <select
                 aria-label="Budget Tier"
                 value={household.budgetTier}
@@ -332,6 +412,7 @@ export default function App() {
                 <button
                   key={lang.id}
                   type="button"
+                  aria-pressed={household.language === lang.id}
                   onClick={() => setHousehold((prev) => ({ ...prev, language: lang.id }))}
                   className={`min-h-[34px] px-2.5 text-xs font-semibold cursor-pointer ${
                     household.language === lang.id
@@ -346,6 +427,7 @@ export default function App() {
 
             <button
               type="button"
+              aria-pressed={household.eli10}
               onClick={() => setHousehold((prev) => ({ ...prev, eli10: !prev.eli10 }))}
               className={`min-h-[36px] px-3 rounded-lg border text-xs font-semibold flex items-center gap-1.5 cursor-pointer ${
                 household.eli10
@@ -353,71 +435,108 @@ export default function App() {
                   : 'border-[#E2DDD2] dark:border-[#283836] bg-[#FFFFFF] dark:bg-[#0E1514]'
               }`}
             >
-              <Baby className="w-3.5 h-3.5" />
+              <Baby className="w-3.5 h-3.5" aria-hidden="true" />
               Explain Like I&apos;m 10
             </button>
 
             <button
               type="button"
+              aria-pressed={darkMode}
               onClick={() => setDarkMode((v) => !v)}
               aria-label="Toggle Light/Dark Mode"
               className="min-h-[36px] px-2.5 rounded-lg border border-[#E2DDD2] dark:border-[#283836] bg-[#FFFFFF] dark:bg-[#0E1514] flex items-center gap-1.5 cursor-pointer"
             >
-              {darkMode ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+              {darkMode ? (
+                <Sun className="w-3.5 h-3.5" aria-hidden="true" />
+              ) : (
+                <Moon className="w-3.5 h-3.5" aria-hidden="true" />
+              )}
               <span className="hidden sm:inline">{darkMode ? 'Light' : 'Dark'}</span>
             </button>
+
+            {user ? (
+              <button
+                type="button"
+                onClick={() => void handleSignOut()}
+                className="min-h-[36px] px-2.5 rounded-lg border border-[#E2DDD2] dark:border-[#283836] bg-[#FFFFFF] dark:bg-[#0E1514] flex items-center gap-1.5 cursor-pointer font-medium"
+                title={`Signed in as ${user.email || 'User'}`}
+              >
+                <LogOut className="w-3.5 h-3.5 text-[#0F766E]" aria-hidden="true" />
+                <span className="hidden sm:inline">Sign Out</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void handleSignIn()}
+                className="min-h-[36px] px-2.5 rounded-lg border border-[#E2DDD2] dark:border-[#283836] bg-[#FFFFFF] dark:bg-[#0E1514] flex items-center gap-1.5 cursor-pointer font-medium"
+              >
+                <LogIn className="w-3.5 h-3.5 text-[#0F766E]" aria-hidden="true" />
+                <span className="hidden sm:inline">Sync Account</span>
+              </button>
+            )}
           </div>
         </div>
+        {authMessage && (
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 pb-2 text-xs text-[#C2410C]">
+            {authMessage}
+          </div>
+        )}
       </div>
 
       {/* Main Content */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
-        {activeTab === 'brief' && (
-          <ProtectionBriefView
-            household={household}
-            agentOutputs={agentOutputs}
-            personalizationEnabled={personalizationEnabled}
-            onTogglePersonalization={() => setPersonalizationEnabled((v) => !v)}
-            onResetPreferences={handleResetPreferences}
-            onEmergencyTrigger={(reason) => {
-              setEmergencyReason(reason);
-              setEmergencyOpen(true);
-            }}
-            onNavigateTab={setActiveTab}
-          />
-        )}
+      <main id="main-content" className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
+        <div
+          id={`panel-${activeTab}`}
+          role="tabpanel"
+          aria-labelledby={`tab-${activeTab}`}
+        >
+          {activeTab === 'brief' && (
+            <ProtectionBriefView
+              household={household}
+              agentOutputs={agentOutputs}
+              personalizationEnabled={personalizationEnabled}
+              onTogglePersonalization={() => setPersonalizationEnabled((v) => !v)}
+              onResetPreferences={handleResetPreferences}
+              onEmergencyTrigger={(reason) => {
+                setEmergencyReason(reason);
+                setEmergencyOpen(true);
+              }}
+              onNavigateTab={setActiveTab}
+            />
+          )}
 
-        {activeTab === 'agents' && (
-          <AgentsPipelineView
-            household={household}
-            outputs={agentOutputs}
-            runningAgent={runningAgent}
-            sequentialRunning={sequentialRunning}
-            roomImageBase64={roomImageBase64}
-            roomImageMimeType={roomImageMimeType}
-            onUploadRoomPhoto={(b64, mime) => {
-              setRoomImageBase64(b64);
-              setRoomImageMimeType(mime);
-            }}
-            onRunSingleAgent={async (id) => {
-              await runAgent(id);
-            }}
-            onRunAllSequentially={handleRunAllSequentially}
-          />
-        )}
+          {activeTab === 'agents' && (
+            <AgentsPipelineView
+              household={household}
+              outputs={agentOutputs}
+              runningAgent={runningAgent}
+              sequentialRunning={sequentialRunning}
+              roomImageBase64={roomImageBase64}
+              roomImageMimeType={roomImageMimeType}
+              onUploadRoomPhoto={(b64, mime) => {
+                setRoomImageBase64(b64);
+                setRoomImageMimeType(mime);
+              }}
+              onRunSingleAgent={async (id) => {
+                await runAgent(id);
+              }}
+              onRunAllSequentially={handleRunAllSequentially}
+            />
+          )}
 
-        {activeTab === 'twin' && <DigitalTwinView household={household} />}
+          {activeTab === 'twin' && <DigitalTwinView household={household} />}
 
-        {activeTab === 'indoor' && (
-          <IndoorCommunityView
-            household={household}
-            indoorAgentOutput={agentOutputs.indoor_air}
-            runningIndoorAgent={runningAgent === 'indoor_air'}
-            onUploadAndRunIndoorAgent={handleUploadAndRunIndoorAgent}
-            onToggleMemberPrivacy={handleToggleMemberPrivacy}
-            onAddFamilyMember={handleAddFamilyMember}
-          />
-        )}
+          {activeTab === 'indoor' && (
+            <IndoorCommunityView
+              household={household}
+              indoorAgentOutput={agentOutputs.indoor_air}
+              runningIndoorAgent={runningAgent === 'indoor_air'}
+              onUploadAndRunIndoorAgent={handleUploadAndRunIndoorAgent}
+              onToggleMemberPrivacy={handleToggleMemberPrivacy}
+              onAddFamilyMember={handleAddFamilyMember}
+            />
+          )}
+        </div>
       </main>
 
       {/* Calm Persistent Non-Medical Disclaimer Footer */}

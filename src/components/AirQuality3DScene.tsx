@@ -777,7 +777,11 @@ export const AirQuality3DScene: React.FC<AirQuality3DProps> = ({
   }
 
   return (
-    <div className="relative w-full h-[520px] md:h-[580px] rounded-2xl overflow-hidden border border-[#E2DDD2] dark:border-[#283836] bg-[#C9D4CF]">
+    <div
+      role="region"
+      aria-label="Interactive 3D Household and Street Airshed Digital Twin"
+      className="relative w-full h-[520px] md:h-[580px] rounded-2xl overflow-hidden border border-[#E2DDD2] dark:border-[#283836] bg-[#C9D4CF]"
+    >
       {/* Isolated WebGL mount container */}
       <div ref={mountRef} className="w-full h-full" />
 
@@ -786,7 +790,7 @@ export const AirQuality3DScene: React.FC<AirQuality3DProps> = ({
         className="absolute top-4 left-4 z-10 rounded-xl px-4 py-2.5 text-white pointer-events-none"
         style={{ backgroundColor: 'rgba(22, 32, 31, 0.86)' }}
       >
-        <div className="text-xs text-[#A7B8B5]">3D Household & Street Airshed</div>
+        <div className="text-xs text-[#A7B8B5]">3D Household &amp; Street Airshed</div>
         <div className="text-sm font-semibold tabular-nums mt-0.5">
           Outdoor PM2.5: {pm25} µg/m³ · Wind {windKmh} km/h ·{' '}
           {roomSealed && purifierActive
@@ -801,17 +805,18 @@ export const AirQuality3DScene: React.FC<AirQuality3DProps> = ({
       <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 w-[min(780px,94%)] flex flex-col items-center">
         <button
           type="button"
+          aria-expanded={!dockCollapsed}
           onClick={() => setDockCollapsed((v) => !v)}
           className="mb-1.5 px-3 py-1 rounded-lg text-xs font-medium text-white flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
           style={{ backgroundColor: 'rgba(22, 32, 31, 0.9)' }}
         >
           {dockCollapsed ? (
             <>
-              <ChevronUp className="w-3.5 h-3.5" /> Show 3D Controls
+              <ChevronUp className="w-3.5 h-3.5" aria-hidden="true" /> Show 3D Controls
             </>
           ) : (
             <>
-              <ChevronDown className="w-3.5 h-3.5" /> Hide 3D Controls
+              <ChevronDown className="w-3.5 h-3.5" aria-hidden="true" /> Hide 3D Controls
             </>
           )}
         </button>
@@ -821,12 +826,13 @@ export const AirQuality3DScene: React.FC<AirQuality3DProps> = ({
             className="w-full rounded-2xl px-4 py-3 text-white flex flex-wrap items-center justify-between gap-3 border border-white/15"
             style={{ backgroundColor: 'rgba(22, 32, 31, 0.92)' }}
           >
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <Eye className="w-4 h-4 text-[#2DD4BF] mr-1 shrink-0" />
+            <div className="flex items-center gap-1.5 flex-wrap" role="group" aria-label="3D Camera presets">
+              <Eye className="w-4 h-4 text-[#2DD4BF] mr-1 shrink-0" aria-hidden="true" />
               {(Object.keys(PRESET_VIEWS) as CameraPreset[]).map((key) => (
                 <button
                   key={key}
                   type="button"
+                  aria-pressed={preset === key}
                   onClick={() => selectPreset(key)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                     preset === key
@@ -842,6 +848,7 @@ export const AirQuality3DScene: React.FC<AirQuality3DProps> = ({
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
+                aria-pressed={roomSealed}
                 onClick={onToggleSeal}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   roomSealed
@@ -853,6 +860,7 @@ export const AirQuality3DScene: React.FC<AirQuality3DProps> = ({
               </button>
               <button
                 type="button"
+                aria-pressed={purifierActive}
                 onClick={onTogglePurifier}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   purifierActive
@@ -860,7 +868,7 @@ export const AirQuality3DScene: React.FC<AirQuality3DProps> = ({
                     : 'bg-white/10 text-white/85 hover:bg-white/20'
                 }`}
               >
-                <ShieldCheck className="w-3.5 h-3.5" />
+                <ShieldCheck className="w-3.5 h-3.5" aria-hidden="true" />
                 {purifierActive ? 'HEPA Purifier: On' : 'Turn On HEPA'}
               </button>
             </div>

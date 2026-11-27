@@ -1,0 +1,134 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidCityId(cityId) {
+      return cityId is string && cityId.size() >= 2 && cityId.size() <= 64 && cityId.matches('^[a-z0-9_]+$');
+    }
+
+    function isValidHouseholdPreference(data, userId) {
+      return data.keys().hasAll(['userId', 'cityId', 'language', 'budgetTier', 'eli10', 'roomSqft', 'memberCount', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'cityId', 'language', 'budgetTier', 'eli10', 'roomSqft', 'memberCount', 'updatedAt'])
+        && data.userId == userId
+        && isValidId(data.userId)
+        && isValidCityId(data.cityId)
+        && data.language in ['en', 'hi', 'bn']
+        && data.budgetTier in ['inr_0', 'under_500', 'under_2000', 'under_5000', 'under_10000']
+        && data.eli10 is bool
+        && data.roomSqft is number && data.roomSqft >= 40 && data.roomSqft <= 5000
+        && data.memberCount is number && data.memberCount >= 1 && data.memberCount <= 20
+        && data.updatedAt == request.time;
+    }
+
+    function isValidCommunityPulse(data) {
+      return data.keys().hasAll([
+          'authorId', 'cityId', 'h3Zone', 'category', 'severity',
+          'note', 'corroborations', 'confidence', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'authorId', 'cityId', 'h3Zone', 'category', 'severity',
+          'note', 'corroborations', 'confidence', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.authorId)
+        && isValidCityId(data.cityId)
+        && data.h3Zone is string && data.h3Zone.size() >= 3 && data.h3Zone.size() <= 40 && data.h3Zone.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.category in [
+          'smoke', 'garbage_burning', 'construction_dust', 'traffic_congestion',
+          'industrial_emissions', 'unusual_odor', 'visibility_problems', 'local_pollution_event'
+        ]
+        && data.severity in ['mild', 'moderate', 'severe']
+        && data.note is string && data.note.size() >= 1 && data.note.size() <= 240
+        && data.corroborations is number && data.corroborations >= 1 && data.corroborations <= 500
+        && data.confidence is number && data.confidence >= 0 && data.confidence <= 1
+        && data.status in ['unconfirmed_single', 'community_corroborated', 'multi_source_verified']
+        && data.createdAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    function isValidSavedBrief(data) {
+      return data.keys().hasAll(['userId', 'cityId', 'agentId', 'summary', 'createdAt'])
+        && data.keys().hasOnly(['userId', 'cityId', 'agentId', 'summary', 'createdAt'])
+        && data.userId == request.auth.uid
+        && isValidId(data.userId)
+        && isValidCityId(data.cityId)
+        && data.agentId is string && data.agentId.size() >= 3 && data.agentId.size() <= 48 && data.agentId.matches('^[a-z_]+$')
+        && data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 300
+        && data.createdAt == request.time;
+    }
+
+    // 1. Private Household Preferences (PII isolated under /users/{userId}/private/{docId})
+    match /users/{userId}/private/{docId} {
+      allow get: if isValidId(userId) && isValidId(docId) && isOwner(userId);
+      allow list: if isOwner(userId);
+      allow create: if isValidId(userId) && isValidId(docId) && isOwner(userId)
+        && isValidHouseholdPreference(incoming(), userId);
+      allow update: if isValidId(userId) && isValidId(docId) && isOwner(userId)
+        && isValidHouseholdPreference(incoming(), userId)
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'cityId', 'language', 'budgetTier', 'eli10', 'roomSqft', 'memberCount', 'updatedAt'
+        ]);
+      allow delete: if isValidId(userId) && isValidId(docId) && isOwner(userId);
+    }
+
+    // 2. Community Pulse 2.0 Observations (No PII stored; verified auth required)
+    match /communityReports/{reportId} {
+      allow get: if isValidId(reportId) && isSignedIn();
+      allow list: if isSignedIn() && existing().corroborations >= 1;
+      allow create: if isValidId(reportId) && isSignedIn()
+        && isValidCommunityPulse(incoming())
+        && incoming().authorId == request.auth.uid
+        && incoming().corroborations == 1
+        && incoming().status == 'unconfirmed_single'
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(reportId) && isSignedIn()
+        && isValidCommunityPulse(incoming())
+        && incoming().authorId == existing().authorId
+        && incoming().cityId == existing().cityId
+        && incoming().h3Zone == existing().h3Zone
+        && incoming().category == existing().category
+        && incoming().createdAt == existing().createdAt
+        && incoming().corroborations == existing().corroborations + 1
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'corroborations', 'confidence', 'status', 'updatedAt'
+        ]);
+      allow delete: if isValidId(reportId) && isSignedIn() && existing().authorId == request.auth.uid;
+    }
+
+    // 3. Saved Agent Briefs (Strictly owner-scoped)
+    match /agentBriefs/{briefId} {
+      allow get: if isValidId(briefId) && isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && existing().userId == request.auth.uid;
+      allow create: if isValidId(briefId) && isSignedIn() && isValidSavedBrief(incoming());
+      allow delete: if isValidId(briefId) && isSignedIn() && existing().userId == request.auth.uid;
+    }
+
+    // 4. Connection health check
+    match /test/connection {
+      allow get: if true;
+    }
+  }
+}

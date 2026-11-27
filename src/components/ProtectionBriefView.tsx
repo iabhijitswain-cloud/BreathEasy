@@ -12,14 +12,49 @@ import {
   RotateCcw,
   Sparkles,
   AlertCircle,
+  TrendingUp,
+  Compass,
 } from 'lucide-react';
-import { getCpcbVerdict } from '../lib/deterministicEngines.ts';
+import {
+  getCpcbVerdict,
+  getDailyJourneyStages,
+  getPredictiveHourlyOutlook,
+  sanitizeHttpUrl,
+} from '../lib/deterministicEngines.ts';
 import type {
   AgentRunResult,
   GroundingLink,
   HouseholdState,
   SupportedLanguage,
 } from '../types/breatheasy.ts';
+
+interface SpeechRecognitionAlternativeLike {
+  transcript?: string;
+}
+
+interface SpeechRecognitionEventLike {
+  results?: ArrayLike<ArrayLike<SpeechRecognitionAlternativeLike>>;
+}
+
+interface SpeechRecognitionLike {
+  lang: string;
+  interimResults: boolean;
+  maxAlternatives: number;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+}
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+
+function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | undefined {
+  const win = window as Window & {
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+  };
+  return win.SpeechRecognition || win.webkitSpeechRecognition;
+}
 
 interface Props {
   household: HouseholdState;
@@ -48,7 +83,8 @@ const UI_COPY: Record<
   en: {
     briefLabel: 'Observed Snapshot · Guidance Only',
     askHeading: 'Ask BreathEasy',
-    askPlaceholder: 'Ask calmly in English, Hindi, or Bengali — e.g. "Should my child play outside right now?"',
+    askPlaceholder:
+      'Ask calmly in English, Hindi, or Bengali — e.g. "Should my child play outside right now?"',
     listenLabel: 'Voice Ask',
     stopListenLabel: 'Listening...',
     speakLabel: 'Read Aloud',
@@ -104,19 +140,15 @@ const UI_COPY: Record<
 const TIER_STYLES = {
   safe: {
     badge: 'bg-[#0F766E]/10 text-[#0F766E] dark:bg-[#2DD4BF]/15 dark:text-[#2DD4BF]',
-    accent: 'text-[#0F766E] dark:text-[#2DD4BF]',
   },
   caution: {
     badge: 'bg-[#D97706]/12 text-[#B45309] dark:bg-[#F59E0B]/15 dark:text-[#FBBF24]',
-    accent: 'text-[#B45309] dark:text-[#FBBF24]',
   },
   avoid: {
     badge: 'bg-[#C2410C]/12 text-[#C2410C] dark:bg-[#FB923C]/15 dark:text-[#FB923C]',
-    accent: 'text-[#C2410C] dark:text-[#FB923C]',
   },
   emergency: {
     badge: 'bg-[#991B1B]/12 text-[#991B1B] dark:bg-[#F87171]/15 dark:text-[#F87171]',
-    accent: 'text-[#991B1B] dark:text-[#F87171]',
   },
 };
 
@@ -132,6 +164,12 @@ export const ProtectionBriefView: React.FC<Props> = ({
   const verdict = getCpcbVerdict(household.city.baselinePm25);
   const tierStyle = TIER_STYLES[verdict.verdictTier];
   const copy = UI_COPY[household.language];
+  const predictive = getPredictiveHourlyOutlook(household.city);
+  const journey = getDailyJourneyStages(
+    household.city,
+    household.commuteMode,
+    household.schoolTime,
+  );
 
   const [question, setQuestion] = useState('');
   const [asking, setAsking] = useState(false);
@@ -143,7 +181,7 @@ export const ProtectionBriefView: React.FC<Props> = ({
   const [copiedNotice, setCopiedNotice] = useState(false);
 
   const priorityOrder = [...household.members].sort((a, b) => {
-    const rank = {
+    const rank: Record<typeof a.category, number> = {
       infant: 0,
       respiratory_sensitive: 1,
       elderly: 2,
@@ -166,26 +204,33 @@ export const ProtectionBriefView: React.FC<Props> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: q, household }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as {
+        error?: string;
+        emergencyTriggered?: boolean;
+        answer?: string;
+        groundingLinks?: GroundingLink[];
+      };
       if (!res.ok) {
         throw new Error(data.error || 'Could not reach Ask BreathEasy service.');
       }
       if (data.emergencyTriggered) {
-        onEmergencyTrigger(data.answer);
+        onEmergencyTrigger(
+          data.answer ||
+            'Emergency signals detected. Please contact 112 or 102 immediately.',
+        );
         return;
       }
-      setAnswer(data.answer);
+      setAnswer(data.answer || '');
       setLinks(Array.isArray(data.groundingLinks) ? data.groundingLinks : []);
-    } catch (err: any) {
-      setAskError(err?.message || 'Unable to answer right now.');
+    } catch (err: unknown) {
+      setAskError(err instanceof Error ? err.message : 'Unable to answer right now.');
     } finally {
       setAsking(false);
     }
   };
 
   const handleVoiceListen = () => {
-    const SpeechRec =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const SpeechRec = getSpeechRecognitionConstructor();
     if (!SpeechRec) {
       setAskError('Voice input is not supported in this browser; please type your question.');
       return;
@@ -197,11 +242,11 @@ export const ProtectionBriefView: React.FC<Props> = ({
     recognition.maxAlternatives = 1;
     setListening(true);
     setAskError(null);
-    recognition.onresult = (event: any) => {
+    recognition.onresult = (event: SpeechRecognitionEventLike) => {
       const transcript = event?.results?.[0]?.[0]?.transcript || '';
       setListening(false);
       if (transcript) {
-        handleAsk(transcript);
+        void handleAsk(transcript);
       }
     };
     recognition.onerror = () => {
@@ -246,13 +291,19 @@ Priority: ${priorityOrder
   return (
     <div className="space-y-6">
       {/* Hero 5-Second Protection Verdict Card */}
-      <section className="rounded-2xl bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] p-6 md:p-8 shadow-sm">
+      <section
+        aria-labelledby="brief-hero-heading"
+        className="rounded-2xl bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] p-6 md:p-8 shadow-sm"
+      >
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="space-y-2 max-w-2xl">
             <div className="text-xs font-medium tracking-wide uppercase text-[#4B5B59] dark:text-[#A7B8B5]">
               {household.city.locality}, {household.city.name} · {copy.briefLabel}
             </div>
-            <h1 className="font-display text-2xl md:text-3xl font-bold tracking-tight text-[#1A2423] dark:text-[#F1F5F4]">
+            <h1
+              id="brief-hero-heading"
+              className="font-display text-2xl md:text-3xl font-bold tracking-tight text-[#1A2423] dark:text-[#F1F5F4]"
+            >
               {verdict.humanHeadline}
             </h1>
             <p className="text-sm text-[#4B5B59] dark:text-[#A7B8B5]">
@@ -293,7 +344,7 @@ Priority: ${priorityOrder
 
           <div className="rounded-xl bg-[#F0ECE3]/70 dark:bg-[#1E2B29] p-4">
             <div className="text-xs font-semibold text-[#0F766E] dark:text-[#2DD4BF] flex items-center gap-1.5">
-              <Clock className="w-3.5 h-3.5" /> Today&apos;s Predictive Window
+              <Clock className="w-3.5 h-3.5" aria-hidden="true" /> Today&apos;s Predictive Window
             </div>
             <div className="mt-1.5 text-sm font-medium text-[#1A2423] dark:text-[#F1F5F4]">
               {household.city.windKmh < 5
@@ -329,7 +380,7 @@ Priority: ${priorityOrder
                 onClick={handleCopyBrief}
                 className="min-h-[40px] px-3 py-1.5 rounded-lg border border-[#E2DDD2] dark:border-[#283836] bg-[#FFFFFF] dark:bg-[#16201F] text-xs font-medium flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
               >
-                <Share2 className="w-3.5 h-3.5" />
+                <Share2 className="w-3.5 h-3.5" aria-hidden="true" />
                 {copiedNotice ? 'Copied Brief' : copy.shareWhatsapp}
               </button>
             </div>
@@ -337,12 +388,75 @@ Priority: ${priorityOrder
         </div>
       </section>
 
+      {/* Feature D: Predictive Pollution & Risk Intelligence Strip (Observed vs Predicted) */}
+      <section
+        aria-labelledby="predictive-outlook-heading"
+        className="rounded-2xl bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] p-6 shadow-sm space-y-4"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2
+              id="predictive-outlook-heading"
+              className="font-display text-lg font-bold flex items-center gap-2"
+            >
+              <TrendingUp className="w-4 h-4 text-[#0F766E] dark:text-[#2DD4BF]" aria-hidden="true" />
+              Predictive Risk Intelligence (Observed vs. 1h–24h Modeled Outlook)
+            </h2>
+            <p className="text-xs text-[#4B5B59] dark:text-[#A7B8B5] mt-0.5">
+              {predictive.advisory}
+            </p>
+          </div>
+          <span className="text-xs font-mono-tabular text-[#4B5B59] dark:text-[#A7B8B5]">
+            Updated {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </span>
+        </div>
+
+        {predictive.insufficientData ? (
+          <p className="text-xs text-[#B45309] dark:text-[#FBBF24]">{predictive.advisory}</p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            {predictive.horizons.map((h) => (
+              <div
+                key={h.horizonLabel}
+                className="rounded-xl bg-[#FAF7F2] dark:bg-[#0E1514] border border-[#E2DDD2] dark:border-[#283836] p-3.5 space-y-1.5"
+              >
+                <div className="flex items-center justify-between gap-1 text-[11px] font-semibold">
+                  <span className={h.isObserved ? 'text-[#0F766E] dark:text-[#2DD4BF]' : ''}>
+                    {h.horizonLabel}
+                  </span>
+                  <span className="uppercase text-[#4B5B59] dark:text-[#A7B8B5]">
+                    {h.isObserved ? 'Observed' : `${h.confidence} conf`}
+                  </span>
+                </div>
+                <div className="font-mono-tabular text-base font-bold">
+                  {h.pm25Range[0] === h.pm25Range[1]
+                    ? `${h.pm25Range[0]} µg/m³`
+                    : `${h.pm25Range[0]}–${h.pm25Range[1]} µg/m³`}
+                </div>
+                <p className="text-[11px] text-[#4B5B59] dark:text-[#A7B8B5] leading-snug">
+                  {h.driver}
+                </p>
+                <div className="text-[11px] font-medium text-[#4B5B59] dark:text-[#A7B8B5]">
+                  Inversion: {h.inversionRisk}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       {/* Ask BreathEasy (Voice + Search Grounded + Pre-LLM Emergency Safety Gate) */}
-      <section className="rounded-2xl bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] p-6 shadow-sm space-y-4">
+      <section
+        aria-labelledby="ask-breatheasy-heading"
+        className="rounded-2xl bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] p-6 shadow-sm space-y-4"
+      >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="font-display text-lg font-bold flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-[#0F766E] dark:text-[#2DD4BF]" />
+            <h2
+              id="ask-breatheasy-heading"
+              className="font-display text-lg font-bold flex items-center gap-2"
+            >
+              <Sparkles className="w-4 h-4 text-[#0F766E] dark:text-[#2DD4BF]" aria-hidden="true" />
               {copy.askHeading}
             </h2>
             <p className="text-xs text-[#4B5B59] dark:text-[#A7B8B5]">
@@ -351,10 +465,11 @@ Priority: ${priorityOrder
           </div>
           <button
             type="button"
+            aria-expanded={showMemory}
             onClick={() => setShowMemory((v) => !v)}
             className="min-h-[40px] px-3 py-1.5 rounded-lg border border-[#E2DDD2] dark:border-[#283836] text-xs font-medium flex items-center gap-1.5 cursor-pointer hover:bg-[#F0ECE3] dark:hover:bg-[#1E2B29]"
           >
-            <SlidersHorizontal className="w-3.5 h-3.5" />
+            <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
             Memory Controls
           </button>
         </div>
@@ -364,11 +479,11 @@ Priority: ${priorityOrder
           <div className="rounded-xl bg-[#F0ECE3] dark:bg-[#1E2B29] p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
             <div className="space-y-1">
               <div className="font-semibold flex items-center gap-1.5">
-                <Shield className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]" />
-                Local Privacy-First Memory ({personalizationEnabled ? 'Active' : 'Paused'})
+                <Shield className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]" aria-hidden="true" />
+                Privacy-First Adaptive Memory ({personalizationEnabled ? 'Active' : 'Paused'})
               </div>
               <p className="text-[#4B5B59] dark:text-[#A7B8B5]">
-                Stored locally in browser only: City ({household.city.name}), Language (
+                Preferences: City ({household.city.name}), Language (
                 {household.language.toUpperCase()}), Budget ({household.budgetTier}), School Run (
                 {household.schoolTime}). No medical diagnoses stored.
               </p>
@@ -376,6 +491,7 @@ Priority: ${priorityOrder
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                aria-pressed={!personalizationEnabled}
                 onClick={onTogglePersonalization}
                 className="min-h-[38px] px-3 py-1.5 rounded-lg bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] font-medium cursor-pointer"
               >
@@ -386,7 +502,7 @@ Priority: ${priorityOrder
                 onClick={onResetPreferences}
                 className="min-h-[38px] px-3 py-1.5 rounded-lg bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] font-medium flex items-center gap-1 cursor-pointer text-[#C2410C]"
               >
-                <RotateCcw className="w-3.5 h-3.5" /> Reset Memory
+                <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" /> Reset Memory
               </button>
             </div>
           </div>
@@ -398,7 +514,7 @@ Priority: ${priorityOrder
             <button
               key={qp}
               type="button"
-              onClick={() => handleAsk(qp)}
+              onClick={() => void handleAsk(qp)}
               disabled={asking}
               className="min-h-[40px] px-3 py-1.5 rounded-lg bg-[#F0ECE3] dark:bg-[#1E2B29] hover:bg-[#E2DDD2] dark:hover:bg-[#283836] text-xs font-medium text-left transition-colors cursor-pointer disabled:opacity-60"
             >
@@ -411,11 +527,15 @@ Priority: ${priorityOrder
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            handleAsk();
+            void handleAsk();
           }}
           className="flex flex-col sm:flex-row gap-2.5"
         >
+          <label htmlFor="ask-breatheasy-input" className="sr-only">
+            {copy.askHeading}
+          </label>
           <input
+            id="ask-breatheasy-input"
             type="text"
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
@@ -425,6 +545,7 @@ Priority: ${priorityOrder
           <div className="flex gap-2">
             <button
               type="button"
+              aria-pressed={listening}
               onClick={handleVoiceListen}
               disabled={asking}
               className={`min-h-[46px] px-4 rounded-xl border text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
@@ -433,7 +554,11 @@ Priority: ${priorityOrder
                   : 'border-[#E2DDD2] dark:border-[#283836] bg-[#F0ECE3] dark:bg-[#1E2B29]'
               }`}
             >
-              {listening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+              {listening ? (
+                <MicOff className="w-4 h-4" aria-hidden="true" />
+              ) : (
+                <Mic className="w-4 h-4" aria-hidden="true" />
+              )}
               {listening ? copy.stopListenLabel : copy.listenLabel}
             </button>
             <button
@@ -441,60 +566,111 @@ Priority: ${priorityOrder
               disabled={asking || !question.trim()}
               className="min-h-[46px] px-5 rounded-xl bg-[#0F766E] hover:bg-[#0D625B] disabled:opacity-50 text-white text-sm font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
             >
-              <Send className="w-4 h-4" />
+              <Send className="w-4 h-4" aria-hidden="true" />
               {asking ? 'Thinking...' : 'Ask'}
             </button>
           </div>
         </form>
 
         {askError && (
-          <div className="rounded-xl border border-[#C2410C]/40 bg-[#C2410C]/10 p-3 text-xs text-[#C2410C] dark:text-[#FB923C] flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
+          <div
+            role="alert"
+            className="rounded-xl border border-[#C2410C]/40 bg-[#C2410C]/10 p-3 text-xs text-[#C2410C] dark:text-[#FB923C] flex items-center gap-2"
+          >
+            <AlertCircle className="w-4 h-4 shrink-0" aria-hidden="true" />
             <span>{askError}</span>
           </div>
         )}
 
-        {answer && (
-          <div className="rounded-xl bg-[#FAF7F2] dark:bg-[#0E1514] border border-[#E2DDD2] dark:border-[#283836] p-4 space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-[#0F766E] dark:text-[#2DD4BF]">
-                BreathEasy Guidance
-              </span>
-              <button
-                type="button"
-                onClick={() => handleSpeak(answer)}
-                className="min-h-[36px] px-2.5 py-1 rounded-lg border border-[#E2DDD2] dark:border-[#283836] text-xs font-medium flex items-center gap-1 cursor-pointer"
-              >
-                <Volume2 className="w-3.5 h-3.5" /> {copy.speakLabel}
-              </button>
-            </div>
-            <div className="text-sm leading-relaxed whitespace-pre-line text-[#1A2423] dark:text-[#F1F5F4]">
-              {answer}
-            </div>
-            {links.length > 0 && (
-              <div className="pt-2 border-t border-[#E2DDD2] dark:border-[#283836] flex flex-wrap gap-2">
-                {links.map((l) => (
-                  <a
-                    key={l.uri}
-                    href={l.uri}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 text-xs text-[#0F766E] dark:text-[#2DD4BF] hover:underline"
-                  >
-                    <ExternalLink className="w-3 h-3" /> {l.title}
-                  </a>
-                ))}
+        <div aria-live="polite">
+          {answer && (
+            <div className="rounded-xl bg-[#FAF7F2] dark:bg-[#0E1514] border border-[#E2DDD2] dark:border-[#283836] p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-[#0F766E] dark:text-[#2DD4BF]">
+                  BreathEasy Guidance
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleSpeak(answer)}
+                  className="min-h-[36px] px-2.5 py-1 rounded-lg border border-[#E2DDD2] dark:border-[#283836] text-xs font-medium flex items-center gap-1 cursor-pointer"
+                >
+                  <Volume2 className="w-3.5 h-3.5" aria-hidden="true" /> {copy.speakLabel}
+                </button>
               </div>
-            )}
-          </div>
-        )}
+              <div className="text-sm leading-relaxed whitespace-pre-line text-[#1A2423] dark:text-[#F1F5F4]">
+                {answer}
+              </div>
+              {links.length > 0 && (
+                <div className="pt-2 border-t border-[#E2DDD2] dark:border-[#283836] flex flex-wrap gap-2">
+                  {links.map((l) => {
+                    const safeHref = sanitizeHttpUrl(l.uri);
+                    if (!safeHref) return null;
+                    return (
+                      <a
+                        key={safeHref}
+                        href={safeHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-[#0F766E] dark:text-[#2DD4BF] hover:underline"
+                      >
+                        <ExternalLink className="w-3 h-3" aria-hidden="true" /> {l.title}
+                      </a>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Feature G & End-to-End Daily Smog Journey (Supportive Behavioral Nudges) */}
+      <section
+        aria-labelledby="daily-journey-heading"
+        className="rounded-2xl bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] p-6 shadow-sm space-y-4"
+      >
+        <div>
+          <h2
+            id="daily-journey-heading"
+            className="font-display text-lg font-bold flex items-center gap-2"
+          >
+            <Compass className="w-4 h-4 text-[#0F766E] dark:text-[#2DD4BF]" aria-hidden="true" />
+            Calm Daily Protection Journey &amp; Behavioral Nudges
+          </h2>
+          <p className="text-xs text-[#4B5B59] dark:text-[#A7B8B5]">
+            Supportive routine steps tailored for {household.city.name} — zero guilt or fear framing.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+          {journey.map((stage) => (
+            <article
+              key={stage.id}
+              className="rounded-xl bg-[#FAF7F2] dark:bg-[#0E1514] border border-[#E2DDD2] dark:border-[#283836] p-4 space-y-2"
+            >
+              <div className="text-[11px] font-mono-tabular font-semibold text-[#0F766E] dark:text-[#2DD4BF]">
+                {stage.windowLabel}
+              </div>
+              <h3 className="font-display text-sm font-bold">{stage.title}</h3>
+              <p className="text-xs text-[#4B5B59] dark:text-[#A7B8B5] leading-relaxed">
+                {stage.nudge}
+              </p>
+              <div className="pt-1 text-[11px] font-semibold text-[#0F766E] dark:text-[#2DD4BF]">
+                {stage.exposureBenefit}
+              </div>
+            </article>
+          ))}
+        </div>
       </section>
 
       {/* Latest Synthesized Agent 7 Action Plan Preview (if run) */}
       {latestActionPlan && (
-        <section className="rounded-2xl bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] p-6 shadow-sm space-y-2">
+        <section
+          aria-labelledby="synthesized-plan-heading"
+          className="rounded-2xl bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] p-6 shadow-sm space-y-2"
+        >
           <div className="flex items-center justify-between gap-2">
-            <h2 className="font-display text-lg font-bold">
+            <h2 id="synthesized-plan-heading" className="font-display text-lg font-bold">
               Synthesized Daily Plan (Agent 7)
             </h2>
             <button
@@ -502,7 +678,7 @@ Priority: ${priorityOrder
               onClick={() => handleSpeak(latestActionPlan)}
               className="min-h-[36px] px-3 py-1 rounded-lg border border-[#E2DDD2] dark:border-[#283836] text-xs font-medium flex items-center gap-1.5 cursor-pointer"
             >
-              <Volume2 className="w-3.5 h-3.5" /> {copy.speakLabel}
+              <Volume2 className="w-3.5 h-3.5" aria-hidden="true" /> {copy.speakLabel}
             </button>
           </div>
           <div className="text-sm leading-relaxed whitespace-pre-line text-[#1A2423] dark:text-[#F1F5F4]">

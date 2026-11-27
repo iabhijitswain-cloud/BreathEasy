@@ -52,7 +52,7 @@ export const DigitalTwinView: React.FC<Props> = ({ household }) => {
       body: JSON.stringify(payload),
     })
       .then((r) => r.json())
-      .then((data) => {
+      .then((data: TwinScenarioResult) => {
         if (active && data?.title) setResult(data);
       })
       .catch(() => {
@@ -65,7 +65,6 @@ export const DigitalTwinView: React.FC<Props> = ({ household }) => {
 
   return (
     <div className="space-y-6">
-      {/* Interactive 3D Airshed & Household Safe Room */}
       <AirQuality3DScene
         pm25={household.city.baselinePm25}
         windKmh={household.city.windKmh}
@@ -76,21 +75,24 @@ export const DigitalTwinView: React.FC<Props> = ({ household }) => {
         onTogglePurifier={() => setPurifierActive((v) => !v)}
       />
 
-      {/* Digital Twin Lite What-If Simulator */}
-      <section className="rounded-2xl bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] p-6 shadow-sm space-y-5">
+      <section
+        aria-labelledby="digital-twin-heading"
+        className="rounded-2xl bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] p-6 shadow-sm space-y-5"
+      >
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-xs font-medium uppercase tracking-wide text-[#0F766E] dark:text-[#2DD4BF]">
               Deterministic Physics &amp; Impact Translator · Modeled Estimates Only
             </div>
-            <h2 className="font-display text-xl font-bold mt-0.5">
+            <h1 id="digital-twin-heading" className="font-display text-xl font-bold mt-0.5">
               Air Quality Digital Twin — &quot;What-If&quot; Scenario Comparison
-            </h2>
+            </h1>
           </div>
           <div className="flex items-center gap-3 text-xs">
-            <label className="flex items-center gap-2 font-medium">
+            <label htmlFor="purifier-runtime-slider" className="flex items-center gap-2 font-medium">
               Purifier Runtime:
               <input
+                id="purifier-runtime-slider"
                 type="range"
                 min={1}
                 max={12}
@@ -103,12 +105,12 @@ export const DigitalTwinView: React.FC<Props> = ({ household }) => {
           </div>
         </div>
 
-        {/* Scenario Selector */}
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2" role="group" aria-label="What-If scenario presets">
           {PRESETS.map((p) => (
             <button
               key={p.id}
               type="button"
+              aria-pressed={presetId === p.id}
               onClick={() => setPresetId(p.id)}
               className={`min-h-[42px] px-4 py-2 rounded-xl text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
                 presetId === p.id
@@ -121,10 +123,12 @@ export const DigitalTwinView: React.FC<Props> = ({ household }) => {
           ))}
         </div>
 
-        {/* Impact Card */}
-        <div className="rounded-2xl bg-[#FAF7F2] dark:bg-[#0E1514] border border-[#E2DDD2] dark:border-[#283836] p-5 space-y-4">
+        <div
+          aria-live="polite"
+          className="rounded-2xl bg-[#FAF7F2] dark:bg-[#0E1514] border border-[#E2DDD2] dark:border-[#283836] p-5 space-y-4"
+        >
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="font-display text-lg font-bold">{result.title}</h3>
+            <h2 className="font-display text-lg font-bold">{result.title}</h2>
             <span className="text-xs font-medium text-[#4B5B59] dark:text-[#A7B8B5]">
               Confidence: <strong className="uppercase">{result.confidence}</strong>
             </span>
@@ -133,7 +137,8 @@ export const DigitalTwinView: React.FC<Props> = ({ household }) => {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="rounded-xl bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] p-3.5">
               <div className="text-xs text-[#4B5B59] dark:text-[#A7B8B5] flex items-center gap-1.5">
-                <Gauge className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]" /> Modeled PM2.5 Change
+                <Gauge className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]" aria-hidden="true" />{' '}
+                Modeled PM2.5 Change
               </div>
               <div className="font-mono-tabular text-xl font-bold text-[#0F766E] dark:text-[#2DD4BF] mt-1">
                 {result.exposureChangePctRange[0]}% to {result.exposureChangePctRange[1]}%
@@ -146,7 +151,11 @@ export const DigitalTwinView: React.FC<Props> = ({ household }) => {
 
             <div className="rounded-xl bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] p-3.5">
               <div className="text-xs text-[#4B5B59] dark:text-[#A7B8B5] flex items-center gap-1.5">
-                <IndianRupee className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]" /> Estimated Cost Impact
+                <IndianRupee
+                  className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]"
+                  aria-hidden="true"
+                />{' '}
+                Estimated Cost Impact
               </div>
               <div className="font-mono-tabular text-xl font-bold mt-1">
                 {result.costDiffInr === 0
@@ -162,7 +171,8 @@ export const DigitalTwinView: React.FC<Props> = ({ household }) => {
 
             <div className="rounded-xl bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] p-3.5">
               <div className="text-xs text-[#4B5B59] dark:text-[#A7B8B5] flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]" /> Schedule Trade-off
+                <Clock className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]" aria-hidden="true" />{' '}
+                Schedule Trade-off
               </div>
               <div className="font-mono-tabular text-xl font-bold mt-1">
                 {result.timeDiffMin === 0
@@ -178,7 +188,8 @@ export const DigitalTwinView: React.FC<Props> = ({ household }) => {
 
             <div className="rounded-xl bg-[#FFFFFF] dark:bg-[#16201F] border border-[#E2DDD2] dark:border-[#283836] p-3.5">
               <div className="text-xs text-[#4B5B59] dark:text-[#A7B8B5] flex items-center gap-1.5">
-                <Leaf className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]" /> Carbon Impact
+                <Leaf className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#2DD4BF]" aria-hidden="true" />{' '}
+                Carbon Impact
               </div>
               <div className="font-mono-tabular text-xl font-bold mt-1">
                 {result.co2Defensible && result.co2SavedKg !== null

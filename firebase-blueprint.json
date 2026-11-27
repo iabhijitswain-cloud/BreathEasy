@@ -1,0 +1,172 @@
+{
+  "entities": {
+    "HouseholdPreferenceDoc": {
+      "title": "HouseholdPreferenceDoc",
+      "description": "Owner-private household configuration and air quality personalization state.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "cityId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9_]+$"
+        },
+        "language": {
+          "type": "string",
+          "enum": ["en", "hi", "bn"]
+        },
+        "budgetTier": {
+          "type": "string",
+          "enum": ["inr_0", "under_500", "under_2000", "under_5000", "under_10000"]
+        },
+        "eli10": {
+          "type": "boolean"
+        },
+        "roomSqft": {
+          "type": "number"
+        },
+        "memberCount": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "cityId", "language", "budgetTier", "eli10", "roomSqft", "memberCount", "updatedAt"]
+    },
+    "CommunityPulseDoc": {
+      "title": "CommunityPulseDoc",
+      "description": "Privacy-fuzzed neighborhood pollution observation report.",
+      "type": "object",
+      "properties": {
+        "authorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "cityId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9_]+$"
+        },
+        "h3Zone": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 40,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "smoke",
+            "garbage_burning",
+            "construction_dust",
+            "traffic_congestion",
+            "industrial_emissions",
+            "unusual_odor",
+            "visibility_problems",
+            "local_pollution_event"
+          ]
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["mild", "moderate", "severe"]
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "corroborations": {
+          "type": "number"
+        },
+        "confidence": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["unconfirmed_single", "community_corroborated", "multi_source_verified"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "authorId",
+        "cityId",
+        "h3Zone",
+        "category",
+        "severity",
+        "note",
+        "corroborations",
+        "confidence",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SavedAgentBriefDoc": {
+      "title": "SavedAgentBriefDoc",
+      "description": "Owner-scoped saved BreathEasy multi-agent protection summary.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "cityId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9_]+$"
+        },
+        "agentId": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 48,
+          "pattern": "^[a-z_]+$"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "cityId", "agentId", "summary", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/HouseholdPreferenceDoc" },
+      "description": "Strictly owner-isolated household air protection preferences and profile metadata."
+    },
+    "/communityReports/{reportId}": {
+      "schema": { "$ref": "#/entities/CommunityPulseDoc" },
+      "description": "Privacy-fuzzed neighborhood air pollution observations with corroboration tracking."
+    },
+    "/agentBriefs/{briefId}": {
+      "schema": { "$ref": "#/entities/SavedAgentBriefDoc" },
+      "description": "User-scoped saved agent brief snapshots."
+    }
+  }
+}

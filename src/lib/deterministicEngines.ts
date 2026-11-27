@@ -441,3 +441,168 @@ const DISTRESS_PATTERNS = [
 export function detectClinicalEmergencyDistress(text: string): boolean {
   return DISTRESS_PATTERNS.some((rx) => rx.test(text));
 }
+
+export function sanitizeHttpUrl(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      return parsed.toString();
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export interface PredictiveHorizon {
+  horizonLabel: string;
+  isObserved: boolean;
+  pm25Range: [number, number];
+  confidence: 'high' | 'medium' | 'low';
+  driver: string;
+  timestampIso: string;
+  inversionRisk: 'elevated' | 'moderate' | 'low';
+}
+
+export function getPredictiveHourlyOutlook(city: CityPreset): {
+  insufficientData: boolean;
+  horizons: PredictiveHorizon[];
+  advisory: string;
+} {
+  if (!Number.isFinite(city.baselinePm25) || city.baselinePm25 <= 0) {
+    return {
+      insufficientData: true,
+      horizons: [],
+      advisory: 'Insufficient station data to produce a short-term outlook safely.',
+    };
+  }
+
+  const now = Date.now();
+  const base = city.baselinePm25;
+  const lowWind = city.windKmh < 5;
+  const inversionRisk: 'elevated' | 'moderate' | 'low' =
+    lowWind && city.tempC < 18 ? 'elevated' : city.windKmh < 8 ? 'moderate' : 'low';
+
+  const h1Low = Math.max(12, Math.round(base * (lowWind ? 0.96 : 0.88)));
+  const h1High = Math.round(base * (lowWind ? 1.12 : 1.04));
+
+  const h3Low = Math.max(12, Math.round(base * (lowWind ? 0.85 : 0.78)));
+  const h3High = Math.round(base * (lowWind ? 1.06 : 0.96));
+
+  const h6Low = Math.max(12, Math.round(base * (lowWind ? 1.04 : 0.86)));
+  const h6High = Math.round(base * (lowWind ? 1.28 : 1.08));
+
+  const h24Low = Math.max(12, Math.round(base * 0.76));
+  const h24High = Math.round(base * 1.24);
+
+  return {
+    insufficientData: false,
+    horizons: [
+      {
+        horizonLabel: 'Observed Now',
+        isObserved: true,
+        pm25Range: [base, base],
+        confidence: 'high',
+        driver: `Station snapshot · Wind ${city.windKmh} km/h · RH ${city.humidityPct}%`,
+        timestampIso: new Date(now).toISOString(),
+        inversionRisk,
+      },
+      {
+        horizonLabel: '+1h Forecast',
+        isObserved: false,
+        pm25Range: [h1Low, h1High],
+        confidence: 'high',
+        driver: lowWind ? 'Weak dispersion; local traffic plume persistence' : 'Moderate boundary mixing',
+        timestampIso: new Date(now + 3600 * 1000).toISOString(),
+        inversionRisk,
+      },
+      {
+        horizonLabel: '+3h Outlook',
+        isObserved: false,
+        pm25Range: [h3Low, h3High],
+        confidence: 'medium',
+        driver: 'Afternoon solar warming temporarily lifts mixing layer',
+        timestampIso: new Date(now + 3 * 3600 * 1000).toISOString(),
+        inversionRisk: inversionRisk === 'elevated' ? 'moderate' : 'low',
+      },
+      {
+        horizonLabel: '+6h Outlook',
+        isObserved: false,
+        pm25Range: [h6Low, h6High],
+        confidence: 'medium',
+        driver: lowWind
+          ? 'Evening cooling + shallow inversion lid likely traps road emissions'
+          : 'Evening rush traffic with steady breeze',
+        timestampIso: new Date(now + 6 * 3600 * 1000).toISOString(),
+        inversionRisk,
+      },
+      {
+        horizonLabel: '+24h Range',
+        isObserved: false,
+        pm25Range: [h24Low, h24High],
+        confidence: 'low',
+        driver: 'Synoptic wind & regional humidity uncertainty beyond 12 hours',
+        timestampIso: new Date(now + 24 * 3600 * 1000).toISOString(),
+        inversionRisk,
+      },
+    ],
+    advisory:
+      inversionRisk === 'elevated'
+        ? 'Pollution may build before your evening commute due to cooling inversion. Consider completing outdoor errands during the warmer midday window.'
+        : 'Conditions favor steadier dispersion midday; check short-term updates before evening outdoor exercise.',
+  };
+}
+
+export interface DailyJourneyStage {
+  id: 'morning' | 'commute' | 'midday' | 'evening';
+  title: string;
+  windowLabel: string;
+  nudge: string;
+  exposureBenefit: string;
+}
+
+export function getDailyJourneyStages(
+  city: CityPreset,
+  commuteMode: 'metro' | 'car_ac' | 'auto_rickshaw' | 'walk',
+  schoolTime: string,
+): DailyJourneyStage[] {
+  const highSmog = city.baselinePm25 > 120;
+  return [
+    {
+      id: 'morning',
+      title: 'Morning Smog Brief',
+      windowLabel: '06:30 – 07:30 AM',
+      nudge: highSmog
+        ? 'Keep morning stretches indoors today and check N95 fit before stepping out.'
+        : 'Calm early walk is comfortable; pace elders away from main arterial intersections.',
+      exposureBenefit: highSmog ? 'Avoids ~3x exercise inhalation spike' : 'Supports steady morning routine',
+    },
+    {
+      id: 'commute',
+      title: 'School & Work Commute',
+      windowLabel: schoolTime,
+      nudge:
+        commuteMode === 'auto_rickshaw' || commuteMode === 'walk'
+          ? 'Leaving 15–30 minutes earlier or choosing enclosed Metro lowers kerbside exhaust intake.'
+          : 'Keep cabin recirculation on in heavy traffic corridors.',
+      exposureBenefit: 'Est. 18%–45% lower commute PM2.5 exposure',
+    },
+    {
+      id: 'midday',
+      title: 'Midday Window Check',
+      windowLabel: '13:00 – 15:30 PM',
+      nudge:
+        'Brief 15-minute cross-ventilation works best mid-afternoon when sunlight lifts inversion haze.',
+      exposureBenefit: 'Refreshes indoor CO₂ when outdoor haze dips',
+    },
+    {
+      id: 'evening',
+      title: 'Evening Safe Room Routine',
+      windowLabel: '18:30 – 22:00 PM',
+      nudge:
+        'Seal bedroom window gaps, wet-mop floor, and skip incense or candles so the family sleeps in cleaner air.',
+      exposureBenefit: 'Protects 8 hours of overnight recovery',
+    },
+  ];
+}
+

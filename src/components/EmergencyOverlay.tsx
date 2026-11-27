@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   PhoneCall,
   X,
@@ -9,6 +9,7 @@ import {
   Loader2,
   ShieldAlert,
 } from 'lucide-react';
+import { sanitizeHttpUrl } from '../lib/deterministicEngines.ts';
 import type { GroundingLink, HouseholdState } from '../types/breatheasy.ts';
 
 interface Props {
@@ -42,6 +43,19 @@ export const EmergencyOverlay: React.FC<Props> = ({ open, reason, household, onC
   const [placesSummary, setPlacesSummary] = useState<string | null>(null);
   const [placesLinks, setPlacesLinks] = useState<GroundingLink[]>([]);
   const [placesError, setPlacesError] = useState<string | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    closeButtonRef.current?.focus();
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [open, onClose]);
 
   if (!open) return null;
 
@@ -70,12 +84,18 @@ export const EmergencyOverlay: React.FC<Props> = ({ open, reason, household, onC
           cityName: `${household.city.locality}, ${household.city.name}`,
         }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as {
+        summary?: string;
+        places?: GroundingLink[];
+        error?: string;
+      };
       if (!res.ok) throw new Error(data.error || 'Could not look up nearby hospitals.');
-      setPlacesSummary(data.summary);
+      setPlacesSummary(data.summary || null);
       setPlacesLinks(Array.isArray(data.places) ? data.places : []);
-    } catch (err: any) {
-      setPlacesError(err?.message || 'Unable to fetch nearby emergency hospitals.');
+    } catch (err: unknown) {
+      setPlacesError(
+        err instanceof Error ? err.message : 'Unable to fetch nearby emergency hospitals.',
+      );
     } finally {
       setLoadingPlaces(false);
     }
@@ -85,31 +105,35 @@ export const EmergencyOverlay: React.FC<Props> = ({ open, reason, household, onC
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Emergency Playbook & Protective Action Mode"
+      aria-labelledby="emergency-overlay-title"
       className="fixed inset-0 z-50 bg-[#0E1514]/95 text-[#F1F5F4] overflow-y-auto p-4 md:p-8 flex items-start justify-center"
     >
       <div className="w-full max-w-2xl rounded-2xl bg-[#16201F] border-2 border-[#D97706] p-6 md:p-8 space-y-6 my-4">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1">
             <div className="text-xs font-bold uppercase tracking-wider text-[#FBBF24] flex items-center gap-1.5">
-              <ShieldAlert className="w-4 h-4" /> Protective Emergency Playbook
+              <ShieldAlert className="w-4 h-4" aria-hidden="true" /> Protective Emergency Playbook
             </div>
-            <h2 className="font-display text-2xl md:text-3xl font-bold">
+            <h2 id="emergency-overlay-title" className="font-display text-2xl md:text-3xl font-bold">
               Calm, High-Priority Action Mode
             </h2>
           </div>
           <button
+            ref={closeButtonRef}
             type="button"
             onClick={onClose}
             className="min-h-[44px] min-w-[44px] rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center cursor-pointer"
             aria-label="Exit Emergency Playbook"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
         {reason && (
-          <div className="rounded-xl bg-[#991B1B]/30 border border-[#F87171]/40 p-4 text-sm font-medium">
+          <div
+            role="alert"
+            className="rounded-xl bg-[#991B1B]/30 border border-[#F87171]/40 p-4 text-sm font-medium"
+          >
             {reason}
           </div>
         )}
@@ -120,18 +144,21 @@ export const EmergencyOverlay: React.FC<Props> = ({ open, reason, household, onC
             href="tel:112"
             className="min-h-[58px] px-5 py-3 rounded-xl bg-[#DC2626] hover:bg-[#B91C1C] text-white font-display text-lg font-bold flex items-center justify-center gap-2.5"
           >
-            <PhoneCall className="w-5 h-5" /> Call National Emergency 112
+            <PhoneCall className="w-5 h-5" aria-hidden="true" /> Call National Emergency 112
           </a>
           <a
             href="tel:102"
             className="min-h-[58px] px-5 py-3 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white font-display text-lg font-bold flex items-center justify-center gap-2.5"
           >
-            <PhoneCall className="w-5 h-5" /> Call Ambulance 102
+            <PhoneCall className="w-5 h-5" aria-hidden="true" /> Call Ambulance 102
           </a>
         </div>
 
         {/* One Primary Step at a Time */}
-        <div className="rounded-2xl bg-[#0E1514] border border-[#283836] p-5 space-y-4">
+        <div
+          aria-live="polite"
+          className="rounded-2xl bg-[#0E1514] border border-[#283836] p-5 space-y-4"
+        >
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-mono-tabular text-[#A7B8B5]">
               Action {stepIndex + 1} of {EMERGENCY_STEPS.length}
@@ -141,7 +168,7 @@ export const EmergencyOverlay: React.FC<Props> = ({ open, reason, household, onC
               onClick={speakCurrentStep}
               className="min-h-[40px] px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
             >
-              <Volume2 className="w-4 h-4" /> Voice Instructions
+              <Volume2 className="w-4 h-4" aria-hidden="true" /> Voice Instructions
             </button>
           </div>
           <h3 className="font-display text-xl font-bold text-[#F1F5F4]">{currentStep.title}</h3>
@@ -161,7 +188,7 @@ export const EmergencyOverlay: React.FC<Props> = ({ open, reason, household, onC
               onClick={() => setStepIndex((i) => (i + 1) % EMERGENCY_STEPS.length)}
               className="min-h-[42px] px-4 rounded-xl bg-[#0F766E] hover:bg-[#0D625B] text-white text-xs font-semibold flex items-center gap-1 cursor-pointer"
             >
-              Next Step <ChevronRight className="w-4 h-4" />
+              Next Step <ChevronRight className="w-4 h-4" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -179,23 +206,27 @@ export const EmergencyOverlay: React.FC<Props> = ({ open, reason, household, onC
             </div>
             <button
               type="button"
-              onClick={lookupNearbyCare}
+              onClick={() => void lookupNearbyCare()}
               disabled={loadingPlaces}
               className="min-h-[44px] px-4 py-2 rounded-xl bg-[#0F766E] hover:bg-[#0D625B] text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
             >
               {loadingPlaces ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin" /> Finding Care...
+                  <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> Finding Care...
                 </>
               ) : (
                 <>
-                  <MapPin className="w-4 h-4" /> Find Verified ERs Nearby
+                  <MapPin className="w-4 h-4" aria-hidden="true" /> Find Verified ERs Nearby
                 </>
               )}
             </button>
           </div>
 
-          {placesError && <p className="text-xs text-[#F87171]">{placesError}</p>}
+          {placesError && (
+            <p role="alert" className="text-xs text-[#F87171]">
+              {placesError}
+            </p>
+          )}
           {placesSummary && (
             <div className="text-sm whitespace-pre-line text-[#E2E8F0] pt-2 border-t border-[#283836]">
               {placesSummary}
@@ -203,17 +234,21 @@ export const EmergencyOverlay: React.FC<Props> = ({ open, reason, household, onC
           )}
           {placesLinks.length > 0 && (
             <div className="flex flex-wrap gap-3 pt-1">
-              {placesLinks.map((p) => (
-                <a
-                  key={p.uri}
-                  href={p.uri}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1.5 text-xs text-[#2DD4BF] hover:underline"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" /> {p.title}
-                </a>
-              ))}
+              {placesLinks.map((p) => {
+                const safeHref = sanitizeHttpUrl(p.uri);
+                if (!safeHref) return null;
+                return (
+                  <a
+                    key={safeHref}
+                    href={safeHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-xs text-[#2DD4BF] hover:underline"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" /> {p.title}
+                  </a>
+                );
+              })}
             </div>
           )}
         </div>
